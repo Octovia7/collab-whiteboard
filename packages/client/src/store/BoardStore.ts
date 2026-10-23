@@ -8,9 +8,21 @@ import {
   expandBox,
   hitShape,
   keyBetween,
+  maxStampT,
   shapeBounds,
 } from '@whiteboard/shared';
-import type { Box, CreateOp, Op, Point, Shape, ShapeId, ShapeProps, UpdateOp } from '@whiteboard/shared';
+import type {
+  BoardSnapshot,
+  Box,
+  CreateOp,
+  Op,
+  Point,
+  Shape,
+  ShapeId,
+  ShapeProps,
+  SnapshotShape,
+  UpdateOp,
+} from '@whiteboard/shared';
 import { QuadTree } from '../canvas/QuadTree';
 import { Emitter } from '../lib/Emitter';
 
@@ -49,7 +61,7 @@ export class BoardStore {
   readonly clock: LamportClock;
   private readonly board: Board;
   private readonly nextId: () => ShapeId;
-  private readonly tree = new QuadTree();
+  private tree = new QuadTree();
   private opCount = 0;
   /** Rank of every shape id in (z, id) order; rebuilt lazily when z order may have changed. */
   private rank: Map<ShapeId, number> | null = null;
@@ -80,6 +92,41 @@ export class BoardStore {
     this.applyAll(ops, 'remote');
   }
 
+  /**
+   * Replaces the whole board with the server's snapshot (on welcome). The clock observes the
+   * newest stamp in it, so our next edit is stamped later than anything already on the board.
+   */
+  loadSnapshot(snapshot: BoardSnapshot): void {
+    this.board.loadSnapshot(snapshot);
+    this.clock.observe({ t: maxStampT(snapshot), client: this.clientId });
+    this.tree = new QuadTree();
+    for (const id of this.board.ids()) this.reindex(id);
+    this.rank = null;
+    this.zExtremes = null;
+    this.events.emit('change', { ids: this.board.ids(), origin: 'remote' });
+  }
+
+  /**
+   * Re-applies our own not-yet-acked ops on top of a freshly loaded snapshot. No `submit`
+   * event: they are already queued for sending.
+   */
+  reapply(ops: Op[]): void {
+    this.applyAll(ops, 'local');
+  }
+
+  /**
+   * The server rejected one of our ops: put the shape back to the server's registers
+   * (or remove it if the server has no such shape). See Board.replaceShape for why this
+   * bypasses LWW.
+   */
+  rollback(id: ShapeId, serverShape: SnapshotShape | null): void {
+    this.board.replaceShape(id, serverShape);
+    this.rank = null;
+    this.zExtremes = null;
+    this.reindex(id);
+    this.events.emit('change', { ids: [id], origin: 'remote' });
+  }
+
   /** Builds (and stamps) a create, on top of everything unless `z` is given. Pass it to `submit`. */
   makeCreate(props: Omit<ShapeProps, 'z'> & { z?: string }): CreateOp {
     const shape: Shape = { ...props, id: this.nextId(), z: props.z ?? keyBetween(this.topZ(), '') };
@@ -99,6 +146,11 @@ export class BoardStore {
 
   isVisible(id: ShapeId): boolean {
     return this.board.isVisible(id);
+  }
+
+  /** The full board state (registers with stamps), in canonical form. */
+  snapshot(): BoardSnapshot {
+    return this.board.snapshot();
   }
 
   /** Bounds of a shape's geometry (no line width); strokes are measured from their points. */
@@ -181,6 +233,7 @@ export class BoardStore {
 
   /** Keeps the quadtree in sync: only visible shapes are indexed, so tombstones cost nothing to query. */
   private reindex(id: ShapeId): void {
+    // A rollback can remove a shape entirely; isVisible is then false and it leaves the tree.
     const bounds = this.board.isVisible(id) ? this.boundsOf(id) : undefined;
     if (bounds) this.tree.set(id, bounds);
     else this.tree.remove(id);

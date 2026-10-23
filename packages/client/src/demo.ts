@@ -33,6 +33,7 @@ export function seedDemo(store: BoardStore, count: number): void {
 
 export function demoCountFromUrl(): number {
   const raw = new URLSearchParams(window.location.search).get('demo');
-  const n = raw === null ? 60 : Number(raw);
-  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 0), 50_000) : 60;
+  // Off by default now that boards are shared: opt in with ?demo=N on an empty board.
+  const n = raw === null ? 0 : Number(raw);
+  return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 0), 50_000) : 0;
 }

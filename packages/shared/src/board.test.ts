@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Board } from './board';
+import { Board, maxStampT } from './board';
 import type { AppendOp, CreateOp, Shape, ShapeProps, Stamp, UpdateOp } from './types';
 
 const st = (t: number, client: string): Stamp => ({ t, client });
@@ -244,5 +244,36 @@ describe('Board: snapshots', () => {
     two.apply(create(rect('s-2'), st(1, 'b')));
     two.apply(create(rect('s-1'), st(1, 'a')));
     expect(JSON.stringify(one.snapshot())).toBe(JSON.stringify(two.snapshot()));
+  });
+});
+
+describe('Board: rollback helpers', () => {
+  it('snapshotShape returns one shape in snapshot form, or undefined', () => {
+    const b = new Board();
+    b.apply(create(rect('s-1'), st(1, 'a')));
+    expect(b.snapshotShape('s-1')).toEqual(b.snapshot().shapes[0]);
+    expect(b.snapshotShape('nope')).toBeUndefined();
+  });
+
+  it('replaceShape overrides LWW with the given registers, or removes the shape', () => {
+    const server = new Board();
+    server.apply(create(rect('s-1', { x: 0 }), st(1, 'a')));
+    const local = new Board();
+    local.apply(create(rect('s-1', { x: 0 }), st(1, 'a')));
+    local.apply(update('s-1', { x: 99 }, st(9, 'a'))); // the op the server rejected
+    local.replaceShape('s-1', server.snapshotShape('s-1') ?? null);
+    expect(local.get('s-1')?.x).toBe(0);
+    expect(local.snapshot()).toEqual(server.snapshot());
+    local.replaceShape('s-1', null);
+    expect(local.has('s-1')).toBe(false);
+  });
+
+  it('maxStampT finds the newest stamp in registers and chunks', () => {
+    const b = new Board();
+    b.apply(create({ ...rect('k-1'), type: 'stroke' }, st(3, 'a')));
+    b.apply(update('k-1', { x: 1 }, st(5, 'a')));
+    b.apply(append('k-1', 0, [1, 1], st(8, 'a')));
+    expect(maxStampT(b.snapshot())).toBe(8);
+    expect(maxStampT({ shapes: [] })).toBe(0);
   });
 });

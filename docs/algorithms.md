@@ -76,6 +76,8 @@ type Op =
 
 **Batching.** Dragging fires 60 mouse events a second. Don't send 60 ops. Collect changes and flush every 30–50 ms, merging updates to the same shape (`{x:101}` then `{x:104}` becomes just `{x:104}`). This cuts traffic by over 90% and nobody notices the delay.
 
+The merge rule has to be precise: **drop the properties of an earlier unsent update that a later update to the same shape overwrites, and never move a property to the later stamp.** `{x:1, y:1}@5` then `{x:2}@7` sends `{y:1}@5` and `{x:2}@7`, not `{x:2, y:1}@7`. Why: the sender's own board stored `y` with stamp 5. If peers received `y` with stamp 7 and a remote `y@6` then arrived, it would win on the sender's board (6 > 5) and lose on every peer's board (6 < 7), and the replicas would diverge for good. Dropping `x@5` is safe because the same client's `x@7` beats it in every comparison anyway. Creates and appends are never merged. (`packages/client/src/sync/coalesce.ts`; its tests include this exact divergence.)
+
 **Interview point:** "I used property-level operations on a map of independently addressable objects, so most concurrent edits commute and never conflict." *Commute* means the order of applying them doesn't matter.
 
 ## 2. Lamport clocks: agreeing on "later"
@@ -329,7 +331,7 @@ socket.onmessage = (e) => {
 
 **What if a remote op conflicts with my pending one?** Nothing special is needed. Both carry stamps; LWW compares them. If the remote stamp is newer, it overwrites your local value on your screen, exactly as it does on the server and on everyone else's. Your screen "snaps" to the agreed value.
 
-**Rejects and rollback.** The server can refuse an op: a viewer tried to edit, or the op is malformed. It replies with a reject and the server's current version of the shape. The client replaces its local copy with the server's. With LWW stores, rollback is just "accept the server's registers."
+**Rejects and rollback.** The server can refuse an op: a viewer tried to edit, or the op is malformed. It replies with a reject and the server's current registers for the shape (values with their stamps, or `null` if it has none). The client overwrites its local copy with them; this deliberately bypasses LWW, because the rejected op carries a newer stamp than the server's values and would otherwise win. It then re-applies its other still-unacked ops for that shape, since the server's copy predates them, exactly as it does after loading a snapshot.
 
 **Reconnects.** When the socket drops, keep the pending queue. On reconnect, resend everything still in it. Duplicates are safe because applying the same op twice changes nothing (idempotency, section 3).
 
