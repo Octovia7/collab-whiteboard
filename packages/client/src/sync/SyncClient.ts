@@ -1,10 +1,13 @@
-import { LIMITS, parseServerMessage } from '@whiteboard/shared';
-import type { ClientMessage, Op, ServerMessage } from '@whiteboard/shared';
+import { FINAL_CLOSE_CODES, LIMITS, parseServerMessage } from '@whiteboard/shared';
+import type { ClientMessage, Op, Role, ServerMessage } from '@whiteboard/shared';
 import { Emitter } from '../lib/Emitter';
 import type { BoardStore } from '../store/BoardStore';
 import { enqueueCoalesced } from './coalesce';
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
+export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+
+/** Reconnect delays (system-design.md, "SyncClient"): 0.5 s, 1 s, 2 s, ... capped at 10 s. */
+const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 10_000];
 
 export interface SyncOptions {
   /** Full WebSocket URL including ?board=. */
@@ -23,11 +26,12 @@ export interface SyncOptions {
  * - sent ops stay in `pending` until the server acks them, i.e. until they are durable;
  * - ops from other users go into the store with `receive`, where LWW decides;
  * - a reject rolls the shape back to the server's registers.
- * Reconnect with backoff and lastSeq catch-up arrive in milestone 7; on a new socket, unacked
- * ops are simply resent, which is safe because the server dedupes by opId.
+ * - a dropped socket is reopened with backoff; the new welcome brings the full board and every
+ *   unacked op is resent, which is safe because the server dedupes by opId. (Catch-up from
+ *   lastSeq instead of a full snapshot arrives in milestone 7.)
  */
 export class SyncClient {
-  readonly events = new Emitter<{ status: ConnectionStatus; welcome: undefined }>();
+  readonly events = new Emitter<{ status: ConnectionStatus; welcome: undefined; role: Role }>();
   private socket: WebSocket | null = null;
   /** Submitted locally, not yet sent. */
   private outbox: Op[] = [];
@@ -39,6 +43,12 @@ export class SyncClient {
   private currentStatus: ConnectionStatus = 'connecting';
   private offSubmit: (() => void) | null = null;
   private readonly flushMs: number;
+  private currentRole: Role | null = null;
+  private attempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopped = false;
+  /** Why the server closed us for good (board deleted, removed), if it did. */
+  private finalReason: string | null = null;
 
   constructor(
     private readonly store: BoardStore,
@@ -49,6 +59,15 @@ export class SyncClient {
 
   get status(): ConnectionStatus {
     return this.currentStatus;
+  }
+
+  /** Our role on this board, from welcome and live `role` messages; null before welcome. */
+  get role(): Role | null {
+    return this.currentRole;
+  }
+
+  get closeReason(): string | null {
+    return this.finalReason;
   }
 
   /** Ops not yet acknowledged as durable (queued or in flight). */
@@ -62,6 +81,7 @@ export class SyncClient {
   }
 
   start(): void {
+    this.stopped = false;
     this.offSubmit = this.store.events.on('submit', ({ ops }) => {
       for (const op of ops) enqueueCoalesced(this.outbox, op);
       this.scheduleFlush();
@@ -70,6 +90,9 @@ export class SyncClient {
   }
 
   stop(): void {
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.offSubmit?.();
     this.offSubmit = null;
     if (this.flushTimer) clearTimeout(this.flushTimer);
@@ -94,7 +117,7 @@ export class SyncClient {
     const Impl = this.options.WebSocketImpl ?? WebSocket;
     const socket = new Impl(this.options.url);
     this.socket = socket;
-    this.setStatus('connecting');
+    if (this.attempts === 0) this.setStatus('connecting');
     socket.onopen = () => this.send({ t: 'hello', boardId: this.options.boardId, lastSeq: this.lastSeq });
     socket.onmessage = (e: MessageEvent) => {
       // A socket we've stopped or replaced can still deliver a few messages while closing.
@@ -106,10 +129,24 @@ export class SyncClient {
       }
       this.handle(parsed.msg);
     };
-    socket.onclose = () => {
-      if (this.socket !== socket) return; // stopped, or replaced by a newer socket
+    socket.onclose = (e: CloseEvent) => {
+      if (this.socket !== socket || this.stopped) return; // stopped, or replaced by a newer socket
       this.welcomed = false;
-      this.setStatus('disconnected');
+      this.socket = null;
+      if (FINAL_CLOSE_CODES.includes(e.code)) {
+        // The server ended this for good (board deleted, removed, protocol violation).
+        this.finalReason = e.reason || 'closed';
+        this.setStatus('disconnected');
+        return;
+      }
+      // Anything else (network drop, server restart): keep every unacked op and try again.
+      this.setStatus('reconnecting');
+      const delay = BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)] as number;
+      this.attempts++;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        if (!this.stopped) this.open();
+      }, delay);
     };
   }
 
@@ -126,6 +163,8 @@ export class SyncClient {
         this.store.reapply(this.outbox);
         this.lastSeq = msg.seq;
         this.welcomed = true;
+        this.attempts = 0;
+        this.setRole(msg.role);
         this.setStatus('connected');
         this.events.emit('welcome', undefined);
         this.flush();
@@ -153,6 +192,9 @@ export class SyncClient {
         this.store.reapply([...this.pending.values(), ...this.outbox].filter(targets));
         return;
       }
+      case 'role':
+        this.setRole(msg.role);
+        return;
       case 'error':
         console.error(`sync: server error ${msg.code}: ${msg.message}`);
         return; // the server closes the socket next; onclose updates the status
@@ -169,6 +211,12 @@ export class SyncClient {
 
   private send(msg: ClientMessage): void {
     this.socket?.send(JSON.stringify(msg));
+  }
+
+  private setRole(role: Role): void {
+    if (role === this.currentRole) return;
+    this.currentRole = role;
+    this.events.emit('role', role);
   }
 
   private setStatus(status: ConnectionStatus): void {

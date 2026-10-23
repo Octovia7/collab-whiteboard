@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { boardIdFromUrl, socketUrl } from './boardId';
+import type { BoardSummary, User } from './api';
+import { openBoardList, socketUrl } from './boardId';
 import { Camera } from './canvas/Camera';
 import { PanZoomInput } from './canvas/PanZoomInput';
 import { Renderer } from './canvas/Renderer';
@@ -12,6 +13,7 @@ import { SyncClient } from './sync/SyncClient';
 import { ToolController } from './tools/ToolController';
 import { ConnectionBadge } from './ui/ConnectionBadge';
 import { Toolbar } from './ui/Toolbar';
+import { UserMenu } from './ui/UserMenu';
 import { ZoomControls } from './ui/ZoomControls';
 
 /** 8 random characters per tab: the clientId part of shape IDs and the Lamport tie-breaker. */
@@ -28,8 +30,7 @@ interface Board {
   redrawOverlay: { current: () => void };
 }
 
-function createBoard(): Board {
-  const boardId = boardIdFromUrl();
+function createBoard(boardId: string): Board {
   const store = new BoardStore(newClientId());
   const sync = new SyncClient(store, { url: socketUrl(boardId), boardId });
   const camera = new Camera();
@@ -42,10 +43,17 @@ function createBoard(): Board {
   return { boardId, store, sync, camera, selection, tools, redrawOverlay };
 }
 
-export function App() {
+interface Props {
+  board: BoardSummary;
+  user: User;
+  onLogout: () => void;
+}
+
+/** One open board: canvas, tools and sync. Rendered by Root once access is confirmed. */
+export function App({ board: summary, user, onLogout }: Props) {
   // Created once per mount and never put in React state that changes: the canvas reads the
   // store directly, so shape edits never re-render React.
-  const [board] = useState(createBoard);
+  const [board] = useState(() => createBoard(summary.id));
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -108,6 +116,13 @@ export function App() {
       </div>
       <Toolbar tools={board.tools} selection={board.selection} />
       <ZoomControls camera={board.camera} getCenter={getCenter} />
+      <header className="board-header">
+        <button type="button" className="link" onClick={openBoardList}>
+          ← Boards
+        </button>
+        <span className="board-title">{summary.title}</span>
+        <UserMenu user={user} onLogout={onLogout} />
+      </header>
       <ConnectionBadge sync={board.sync} boardId={board.boardId} />
     </>
   );

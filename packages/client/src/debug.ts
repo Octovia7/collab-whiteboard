@@ -24,6 +24,8 @@ export interface DebugHandle {
   toScreen(x: number, y: number): Point;
   toWorld(x: number, y: number): Point;
   status(): ConnectionStatus;
+  /** Role from welcome / live role changes; null before welcome. */
+  role(): string | null;
   /** Local ops not yet acked by the server. */
   unacked(): number;
 }
@@ -57,6 +59,7 @@ export function installDebugHandle(parts: {
     toScreen: (x: number, y: number) => camera.toScreen(x, y),
     toWorld: (x: number, y: number) => camera.toWorld(x, y),
     status: () => sync.status,
+    role: () => sync.role,
     unacked: () => sync.unackedCount,
   });
   return () => {
