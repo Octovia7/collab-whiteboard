@@ -58,6 +58,8 @@ describe('server messages', () => {
     expect(okS({ t: 'ack', opIds: ['a:1'], seq: 3 })).toBe(true);
     expect(okS({ t: 'reject', opId: 'a:1', reason: 'unknown_shape', shape: null })).toBe(true);
     expect(okS({ t: 'error', code: 'bad_message', message: 'x' })).toBe(true);
+    expect(okS({ t: 'role', role: 'viewer' })).toBe(true);
+    expect(okS({ t: 'role', role: 'admin' })).toBe(false);
     expect(okS({ t: 'welcome', you: { userId: 'u' }, role: 'editor', peers: [], snapshot: null, seq: 0 })).toBe(false);
   });
 });

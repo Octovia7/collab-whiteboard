@@ -145,3 +145,118 @@ body,
 .connection.disconnected .dot {
   background: #e03131;
 }
+
+.connection .view-only {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fff3bf;
+  color: #8a6d00;
+}
+
+.connection.reconnecting .dot {
+  background: #f08c00;
+}
+
+.board-header {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.board-title {
+  font-weight: 600;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page {
+  max-width: 420px;
+  margin: 80px auto;
+  padding: 0 16px;
+  overflow: auto;
+}
+
+.page.boards {
+  max-width: 640px;
+}
+
+.page header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.page form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.page label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.page input {
+  padding: 8px;
+  font: inherit;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+}
+
+.page button,
+.user-menu button {
+  padding: 6px 12px;
+  font: inherit;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+button.link {
+  border: 0;
+  background: none;
+  color: #1971c2;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.page .error {
+  color: #c92a2a;
+}
+
+.page ul {
+  padding: 0;
+  list-style: none;
+}
+
+.page li {
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.page .role {
+  color: #868e96;
+  font-size: 12px;
+}

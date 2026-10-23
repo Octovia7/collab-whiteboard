@@ -103,7 +103,21 @@ export type ServerMessage =
   | { t: 'ack'; opIds: string[]; seq: number }
   /** `shape` is the server's current registers for rollback, or null if it has no such shape. */
   | { t: 'reject'; opId: string; reason: string; shape: SnapshotShape | null }
+  /** Your role on this board changed; it applies to your next batch (no reconnect needed). */
+  | { t: 'role'; role: Role }
   | { t: 'error'; code: string; message: string };
+
+/**
+ * WebSocket close codes the server uses after accepting a socket. The client must not
+ * reconnect after these; any other close (network drop, server restart) is retried.
+ * (Auth failures happen earlier, as HTTP 401/403 on the upgrade, so there is no socket.)
+ */
+export const CLOSE = {
+  policyViolation: 1008,
+  removedFromBoard: 4003,
+  boardDeleted: 4004,
+} as const;
+export const FINAL_CLOSE_CODES: readonly number[] = Object.values(CLOSE);
 
 // The server is trusted for board content, so snapshots get a structural check only:
 // deep-validating 10,000 shapes on every join would cost more than it protects.
@@ -124,6 +138,7 @@ export const serverMessageSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('ops'), ops: z.array(opSchema), seq }),
   z.object({ t: z.literal('ack'), opIds: z.array(z.string()), seq }),
   z.object({ t: z.literal('reject'), opId: z.string(), reason: z.string(), shape: snapshotShapeSchema.nullable() }),
+  z.object({ t: z.literal('role'), role }),
   z.object({ t: z.literal('error'), code: z.string(), message: z.string() }),
 ]);
 

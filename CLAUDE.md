@@ -21,15 +21,17 @@ Read the relevant section before implementing a feature. If the code and the doc
 ## Commands
 
 ```bash
-docker compose up -d          # postgres + redis
+docker compose up -d          # postgres (host port 55432) + redis (56379); 5432/5433 are taken on this machine
 pnpm install
 pnpm dev                      # client (Vite) + server (tsx watch) together
 pnpm test                     # all Vitest suites (convergence test with 50 seeds)
 pnpm test:convergence         # randomized convergence test, all 500 seeds (must always pass)
 CONVERGENCE_SEED=42 pnpm test:convergence   # replay one failing seed (CONVERGENCE_SEEDS=n changes the count)
 pnpm test:watch               # Vitest in watch mode
-pnpm test:e2e                 # Playwright (Chromium); starts its own server :3101 and client :5199
-pnpm -F server db:migrate     # run Drizzle migrations
+pnpm test:integration         # Vitest against Docker Postgres (db whiteboard_test)
+pnpm test:e2e                 # Playwright (Chromium); db whiteboard_e2e, server :3101 (tests may kill/restart it), client :5199
+pnpm -F server db:migrate     # run Drizzle migrations (the server also runs them on start)
+pnpm -F server db:generate    # new migration from src/db/schema.ts (never connects to a DB)
 pnpm typecheck && pnpm lint
 ```
 
@@ -77,7 +79,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Canvas renderer + camera (pan, zoom-to-cursor, HiDPI)
 - [x] Quadtree, hit testing, select & shape tools
 - [x] Server rooms + WebSocket sync (pending queue, acks, broadcast)
-- [ ] Postgres persistence, snapshots, auth, roles
+- [x] Postgres persistence, snapshots, auth, roles
 - [ ] Pen tool (streaming, RDP, smoothing), eraser, presence
 - [ ] Undo/redo, sticky notes, reconnect + catch-up
 - [ ] Redis pub/sub multi-server, sharing, rate limits
@@ -95,8 +97,8 @@ Decisions (also in the docs):
   points, never stored; `w`/`h` are unused. Strokes can't be resized in v1: move, recolor, delete only (algorithms.md §7a).
 
 Workflow: one branch per milestone (`milestone-N-name`). I don't check milestones manually: verify each one yourself in a
-real browser (Playwright E2E, plus looking at screenshots), and treat typecheck + lint + unit + convergence + E2E all
-passing as approval to merge into main and tick it off. E2E reads tab state only through `window.__board` (read-only,
+real browser (Playwright E2E, plus looking at screenshots), and treat typecheck + lint + unit + convergence +
+integration + E2E all passing as approval to merge into main and tick it off. Every milestone adds E2E tests for its features. E2E reads tab state only through `window.__board` (read-only,
 dev builds only) and acts only through real mouse/keyboard input.
 
 Milestone 2 done and merged: client package, Camera, Renderer (two layers, draw on demand, HiDPI), pan/zoom input,
@@ -118,3 +120,17 @@ Board id from `?board=`. Verified by `tests/sync.test.ts` and Playwright E2E (2-
 late join, plus camera and tools for milestones 2-3).
 M4 scope limits (lifted in M5/M7): anonymous per-socket userId with editor role, in-memory OpStore, rooms never unloaded,
 no reconnect (badge says reload). `?demo=N` is off by default and seeds only an empty board after welcome.
+
+Milestone 5 done and merged: Drizzle schema + migration (drizzle/0000_init.sql), OpWriter (multi-row insert every 50 ms /
+200 ops, ON CONFLICT (board_id, op_id) DO NOTHING, retry with backoff; acks wait for it), Snapshotter (every 500 ops / 60 s
+/ on unload; writes only after the OpWriter has drained; deletes ops <= the previous snapshot), rooms load from snapshot +
+tail and unload 60 s after the last socket, auth (bcryptjs cost 12, JWT in httpOnly SameSite=Lax cookie, 7 days), boards and
+members REST, WebSocket upgrade checks Origin + session + role (400/401/403), live role push (`{t:'role'}`), close codes
+4003 removed / 4004 board deleted. Client: login/signup, board list, board header, View-only badge, auto-reconnect with
+backoff (resends pending on welcome). Fault injection for tests: WB_FAULT_COMMIT_DELAY_MS / WB_FAULT_ACK_DELAY_MS (ignored in
+production).
+Numbers for the README (E2E test 5, dev build, bcrypt cost 4 for tests): board with 2,100 ops / 1,000 shapes loads in
+77–176 ms on the server (snapshot seq 2000 + 100-op tail); browser open-to-rendered 0.9–2.6 s (includes Vite dev page load).
+Deferred: tombstone GC (needs deletion wall-clock times; tied to milestone 7's too-far-behind snapshot logic), lastSeq
+catch-up (M7), Redis snapshot lock + INCR seq (M8), share links + login rate limit (M8), OpWriter "Saving paused" breaker.
+Known nit: viewers can select shapes and see resize handles; their edits are rejected and rolled back.

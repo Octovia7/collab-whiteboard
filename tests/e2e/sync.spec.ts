@@ -6,8 +6,8 @@ import {
   expectConverged,
   outlinePoint,
   closeTabs,
-  newBoardId,
-  openTab,
+  joinTab,
+  openTabs,
   shapeById,
   shapes,
   toScreen,
@@ -24,9 +24,8 @@ async function screenshots(pages: Page[], name: string): Promise<void> {
 }
 
 test('1. a shape drawn in tab A appears in tab B, and the reverse', async ({ browser }) => {
-  const board = newBoardId('draw');
-  const a = await openTab(browser, board);
-  const b = await openTab(browser, board);
+  const t = await openTabs(browser, 2);
+  const [a, b] = [t.page(0), t.page(1)];
 
   const rect = await drawShape(a, 'Rectangle', { x: 300, y: 250 }, { x: 460, y: 360 });
   await expect.poll(async () => (await shapeById(b, rect.id))?.type).toBe('rect');
@@ -40,9 +39,8 @@ test('1. a shape drawn in tab A appears in tab B, and the reverse', async ({ bro
 });
 
 test('2. move, recolor and delete sync both ways', async ({ browser }) => {
-  const board = newBoardId('edit');
-  const a = await openTab(browser, board);
-  const b = await openTab(browser, board);
+  const t = await openTabs(browser, 2);
+  const [a, b] = [t.page(0), t.page(1)];
   const rect = await drawShape(a, 'Rectangle', { x: 300, y: 250 }, { x: 460, y: 360 });
   const ellipse = await drawShape(a, 'Ellipse', { x: 600, y: 250 }, { x: 760, y: 380 });
   await expectConverged([a, b]);
@@ -86,9 +84,8 @@ test('2. move, recolor and delete sync both ways', async ({ browser }) => {
 });
 
 test('3. both tabs drag the same shape at the same time; both boards end identical', async ({ browser }) => {
-  const board = newBoardId('concurrent-drag');
-  const a = await openTab(browser, board);
-  const b = await openTab(browser, board);
+  const t = await openTabs(browser, 2);
+  const [a, b] = [t.page(0), t.page(1)];
   const rect = await drawShape(a, 'Rectangle', { x: 400, y: 300 }, { x: 560, y: 420 });
   await expectConverged([a, b]);
 
@@ -122,9 +119,8 @@ test('3. both tabs drag the same shape at the same time; both boards end identic
 });
 
 test('4. one tab deletes a shape while the other drags it: deleted in both', async ({ browser }) => {
-  const board = newBoardId('delete-vs-drag');
-  const a = await openTab(browser, board);
-  const b = await openTab(browser, board);
+  const t = await openTabs(browser, 2);
+  const [a, b] = [t.page(0), t.page(1)];
   const rect = await drawShape(a, 'Rectangle', { x: 400, y: 300 }, { x: 560, y: 420 });
   await expectConverged([a, b]);
 
@@ -149,9 +145,8 @@ test('4. one tab deletes a shape while the other drags it: deleted in both', asy
 });
 
 test('5. a third tab joining late gets an identical board', async ({ browser }) => {
-  const board = newBoardId('late-join');
-  const a = await openTab(browser, board);
-  const b = await openTab(browser, board);
+  const t = await openTabs(browser, 2);
+  const [a, b] = [t.page(0), t.page(1)];
   await drawShape(a, 'Rectangle', { x: 200, y: 200 }, { x: 320, y: 300 });
   const ellipse = await drawShape(b, 'Ellipse', { x: 500, y: 200 }, { x: 640, y: 320 });
   await drawShape(a, 'Arrow', { x: 200, y: 450 }, { x: 420, y: 520 });
@@ -161,7 +156,7 @@ test('5. a third tab joining late gets an identical board', async ({ browser }) 
   await a.keyboard.press('Delete'); // deletes the arrow A just drew (still selected)
   const before = await expectConverged([a, b]);
 
-  const c = await openTab(browser, board);
+  const c = await joinTab(browser, t.boardId, t.owner);
   const after = await expectConverged([a, b, c]);
   expect(after).toEqual(before);
   expect(await shapes(c)).toEqual(await shapes(a));
@@ -169,7 +164,7 @@ test('5. a third tab joining late gets an identical board', async ({ browser }) 
 });
 
 test('screen coordinates line up with world coordinates (sanity check for the helpers)', async ({ browser }) => {
-  const a = await openTab(browser, newBoardId('coords'));
+  const a = (await openTabs(browser, 1)).page(0);
   const rect = await drawShape(a, 'Rectangle', { x: 300, y: 250 }, { x: 460, y: 360 });
   const corner = await toScreen(a, rect.x, rect.y);
   expect(corner.x).toBeCloseTo(300);
