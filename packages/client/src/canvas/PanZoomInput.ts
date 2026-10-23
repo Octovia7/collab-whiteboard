@@ -15,11 +15,23 @@ export class PanZoomInput {
   private spaceDown = false;
   private panPointer: number | null = null;
   private last = { x: 0, y: 0 };
+  private baseCursor = '';
 
   constructor(
     private readonly el: HTMLElement,
     private readonly camera: Camera,
   ) {}
+
+  /** While space is held, primary-button drags belong to panning, not to the active tool. */
+  get spaceHeld(): boolean {
+    return this.spaceDown;
+  }
+
+  /** The active tool's cursor, shown whenever no pan is in progress. */
+  setBaseCursor(cursor: string): void {
+    this.baseCursor = cursor;
+    this.updateCursor();
+  }
 
   /** Returns a detach function. */
   attach(): () => void {
@@ -104,10 +116,10 @@ export class PanZoomInput {
   };
 
   private updateCursor(): void {
-    this.el.style.cursor = this.panPointer !== null ? 'grabbing' : this.spaceDown ? 'grab' : '';
+    this.el.style.cursor = this.panPointer !== null ? 'grabbing' : this.spaceDown ? 'grab' : this.baseCursor;
   }
 }
 
-function isTyping(target: EventTarget | null): boolean {
+export function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }

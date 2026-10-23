@@ -2,29 +2,43 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera } from './canvas/Camera';
 import { PanZoomInput } from './canvas/PanZoomInput';
 import { Renderer } from './canvas/Renderer';
+import { ToolInput } from './canvas/ToolInput';
 import { demoCountFromUrl, seedDemo } from './demo';
 import { BoardStore } from './store/BoardStore';
+import { Selection } from './store/Selection';
+import { ToolController } from './tools/ToolController';
+import { Toolbar } from './ui/Toolbar';
 import { ZoomControls } from './ui/ZoomControls';
 
 /** 8 random characters per tab: the clientId part of shape IDs and the Lamport tie-breaker. */
 const newClientId = () => crypto.randomUUID().slice(0, 8);
 
+interface Board {
+  store: BoardStore;
+  camera: Camera;
+  selection: Selection;
+  tools: ToolController;
+  /** Set once the renderer exists; tools ask for overlay redraws through it. */
+  redrawOverlay: { current: () => void };
+}
+
+function createBoard(): Board {
+  const store = new BoardStore(newClientId());
+  seedDemo(store, demoCountFromUrl());
+  const camera = new Camera();
+  // Start with a small margin so the first shapes aren't flush against the corner.
+  camera.x = -40;
+  camera.y = -40;
+  const selection = new Selection();
+  const redrawOverlay = { current: () => {} };
+  const tools = new ToolController(store, selection, camera, () => redrawOverlay.current());
+  return { store, camera, selection, tools, redrawOverlay };
+}
+
 export function App() {
   // Created once per mount and never put in React state that changes: the canvas reads the
   // store directly, so shape edits never re-render React.
-  const [store] = useState(() => {
-    const s = new BoardStore(newClientId());
-    seedDemo(s, demoCountFromUrl());
-    return s;
-  });
-  const [camera] = useState(() => {
-    const c = new Camera();
-    // Start with a small margin so the first shapes aren't flush against the corner.
-    c.x = -40;
-    c.y = -40;
-    return c;
-  });
-
+  const [board] = useState(createBoard);
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -34,15 +48,32 @@ export function App() {
     const scene = sceneRef.current;
     const overlay = overlayRef.current;
     if (!container || !scene || !overlay) return;
+    const { store, camera, selection, tools, redrawOverlay } = board;
+
     const renderer = new Renderer(container, scene, overlay, store, camera);
+    renderer.setOverlayDrawer((ctx, cam) => tools.drawOverlay(ctx, cam));
+    redrawOverlay.current = () => renderer.markOverlayDirty();
     renderer.start();
-    // Input goes on the overlay because it's the top canvas.
-    const detach = new PanZoomInput(overlay, camera).attach();
+
+    // Input goes on the overlay because it's the top canvas. PanZoomInput attaches first so
+    // it sees space/middle-button presses before the tools do.
+    const panZoom = new PanZoomInput(overlay, camera);
+    const detachPanZoom = panZoom.attach();
+    const detachTools = new ToolInput(overlay, camera, tools, panZoom).attach();
+
+    const offSelection = selection.events.on('change', () => renderer.markOverlayDirty());
+    // A selected shape deleted by someone else (or by undo, later) drops out of the selection.
+    const offPrune = store.events.on('change', () => selection.retain((id) => store.isVisible(id)));
+
     return () => {
-      detach();
+      offPrune();
+      offSelection();
+      detachTools();
+      detachPanZoom();
+      redrawOverlay.current = () => {};
       renderer.stop();
     };
-  }, [store, camera]);
+  }, [board]);
 
   const getCenter = useCallback(() => {
     const el = containerRef.current;
@@ -55,7 +86,8 @@ export function App() {
         <canvas ref={sceneRef} />
         <canvas ref={overlayRef} />
       </div>
-      <ZoomControls camera={camera} getCenter={getCenter} />
+      <Toolbar tools={board.tools} selection={board.selection} />
+      <ZoomControls camera={board.camera} getCenter={getCenter} />
     </>
   );
 }

@@ -5,7 +5,7 @@ import type { AppendOp, CreateOp, Shape, ShapeProps, Stamp, UpdateOp } from './t
 const st = (t: number, client: string): Stamp => ({ t, client });
 
 function rect(id: string, extra: Partial<Shape> = {}): Shape {
-  return { id, type: 'rect', x: 0, y: 0, w: 10, h: 10, color: 'black', z: 'i', ...extra };
+  return { id, type: 'rect', x: 0, y: 0, w: 10, h: 10, color: 'black', z: 'i0', ...extra };
 }
 
 let opCounter = 0;

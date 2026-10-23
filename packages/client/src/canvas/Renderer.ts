@@ -31,7 +31,13 @@ export class Renderer {
   ) {}
 
   start(): void {
-    this.cleanups.push(this.store.events.on('change', () => this.markSceneDirty()));
+    this.cleanups.push(
+      this.store.events.on('change', () => {
+        this.markSceneDirty();
+        // Selection outlines follow their shapes, including when someone else moves them.
+        this.markOverlayDirty();
+      }),
+    );
     this.cleanups.push(
       this.camera.events.on('change', () => {
         this.markSceneDirty();

@@ -99,5 +99,13 @@ Milestone 2 done and merged: client package, Camera, Renderer (two layers, draw 
 rect/ellipse/arrow drawing, demo shapes (`?demo=N`). Checked in the browser, including `?demo=20000`.
 Vite falls back to port 5174 when 5173 is taken.
 
-Next: milestone 3 on `milestone-3-tools`. All tool edits go through `BoardStore.submit()` (sync and undo hook in there);
-resize handles are 8 px and hit-test tolerance 6 px in screen pixels, divided by zoom for world units.
+Milestone 3 (branch `milestone-3-tools`, uncommitted, waiting for the browser check): quadtree culling + hit testing,
+select tool (click, shift-click, drag-move, handle resize, box-select), rect/ellipse/arrow tools, toolbar, colors,
+front/back, delete. All local edits go through `BoardStore.submit()` (emits `submit` for sync/undo later); remote ops
+through `receive()`. Handles 8 px and hit tolerance 6 px in screen pixels, divided by zoom. Drag sends one update per
+pointer move; merging same-shape updates every 50 ms is the sync outbox's job (milestone 4).
+
+Open question (shared/fractional.ts, algorithms.md §5): `keyBetween(top, '')` grows the key by one char every ~6
+appends, so "new shape on top" gives 50-char keys after 300 shapes and 3,334 after 20,000 (`?demo=20000` seeds in
+2.2 s). Proposed fix: variable-length integer head (as in the `fractional-indexing` package, written ourselves),
+making end-appends grow logarithmically.
