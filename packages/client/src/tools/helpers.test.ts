@@ -5,7 +5,7 @@ import { handleAt, handlesFor, resizeShape } from './handles';
 import { keysAbove, keysBelow } from './reorder';
 import { geometry } from './ShapeTool';
 
-const rect: Shape = { id: 'a-1', type: 'rect', x: 0, y: 0, w: 100, h: 50, color: 'black', z: 'i' };
+const rect: Shape = { id: 'a-1', type: 'rect', x: 0, y: 0, w: 100, h: 50, color: 'black', z: 'i0' };
 const arrow: Shape = { ...rect, id: 'a-2', type: 'arrow', x: 10, y: 10, w: 90, h: -10 };
 
 describe('handles', () => {
@@ -40,19 +40,19 @@ describe('handles', () => {
 
 describe('reorder keys', () => {
   it('keysAbove gives ascending keys above the top', () => {
-    const keys = keysAbove('m', 3);
+    const keys = keysAbove('i5', 3);
     expect(keys).toHaveLength(3);
-    expect('m' < (keys[0] as string) && (keys[0] as string) < (keys[1] as string) && (keys[1] as string) < (keys[2] as string)).toBe(true);
+    expect('i5' < (keys[0] as string) && (keys[0] as string) < (keys[1] as string) && (keys[1] as string) < (keys[2] as string)).toBe(true);
   });
 
   it('keysBelow gives ascending keys below the bottom', () => {
-    const keys = keysBelow('m', 3);
-    expect((keys[0] as string) < (keys[1] as string) && (keys[1] as string) < (keys[2] as string) && (keys[2] as string) < 'm').toBe(true);
+    const keys = keysBelow('i5', 3);
+    expect((keys[0] as string) < (keys[1] as string) && (keys[1] as string) < (keys[2] as string) && (keys[2] as string) < 'i5').toBe(true);
   });
 
   it('works on an empty board', () => {
-    expect(keysAbove('', 1)).toEqual(['i']);
-    expect(keysBelow('', 1)).toEqual(['i']);
+    expect(keysAbove('', 1)).toEqual(['i0']);
+    expect(keysBelow('', 1)).toEqual(['i0']);
   });
 });
 

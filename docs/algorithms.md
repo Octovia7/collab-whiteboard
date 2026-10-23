@@ -232,13 +232,13 @@ Only the moved shape changes. Rendering means sorting shapes by key and drawing 
 
 **Why strings instead of decimals.** After about 50 halvings, JavaScript numbers run out of precision and two "different" midpoints become equal. Strings never run out: between `"a"` and `"b"` you can always make `"an"`, between `"a"` and `"an"` you get `"ag"`, and so on, getting longer instead of less precise. Compare keys with plain `<` string comparison (not `localeCompare`, which can sort differently on different machines).
 
-**A simple midpoint function** over the alphabet `0-9a-z` (base 36):
+**First attempt: a midpoint-only function** over the alphabet `0-9a-z` (base 36). It works, but it is not what we ship:
 
 ```ts
 const DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz';
 
 // Returns a key strictly between a and b. a = '' means "start", b = '' means "end".
-function keyBetween(a: string, b: string): string {
+function midpoint(a: string, b: string): string {
   let result = '';
   for (let i = 0; ; i++) {
     const lo = i < a.length ? DIGITS.indexOf(a[i]) : 0;
@@ -247,20 +247,47 @@ function keyBetween(a: string, b: string): string {
     result += DIGITS[lo];   // no room at this position: copy and look one digit deeper
   }
 }
-
-keyBetween('', '');     // 'i'      first shape
-keyBetween('i', '');    // 'r'      on top of it
-keyBetween('i', 'r');   // 'm'      between them
-keyBetween('i', 'j');   // 'ii'     no room at digit 1, so go deeper
+// midpoint('', '') = 'i', midpoint('i', '') = 'r', midpoint('i', 'r') = 'm', midpoint('i', 'j') = 'ii'
 ```
 
-Edge case to handle and test: keys must never end in `'0'`, otherwise nothing fits between `"a"` and `"a0"`. Generating keys only through `keyBetween` from valid keys avoids this; add a unit test.
+**Why midpoint-only grew too fast.** Every new shape goes on top: `midpoint(top, '')`. Each call halves the gap between the top key and the end of the alphabet (`i` → `r` → `v` → `x` → `y` → `z`), so after about 6 shapes the last digit is `z` and the next key needs one more character. Key length grows linearly with the number of shapes created on top. Measured:
 
-For production, the `fractional-indexing` npm package does the same thing with more edge cases handled. For this project we write our own (see `CLAUDE.md`).
+| Shapes created on top | Key length |
+| --- | --- |
+| 10 | 2 (`zx`) |
+| 300 | 50 |
+| 1,000 | 167 |
+| 20,000 | 3,334 |
 
-**Concurrent inserts at the same spot.** Rudraksh and Priya both drop a shape between `i` and `r` at the same moment, and both compute `m`. Equal keys would make draw order depend on the client. Fix: sort by `(key, shapeId)`, so the shape ID breaks ties identically everywhere.
+Every create op and every snapshot carries these keys, `?demo=20000` took 2.2 s just to seed, and the "rebalance past ~50 characters" fix below would trigger after only 300 shapes of completely normal use.
 
-**Key growth.** If people keep inserting at the same spot, keys get long (`iiiiiiii…`). Rare in practice. If a key passes ~50 characters, rebalance: the server rewrites all keys evenly as one batch of updates.
+**What we ship: an integer part plus a fraction** (`packages/shared/src/fractional.ts`, same idea as the `fractional-indexing` npm package, written ourselves):
+
+```
+key = integer part        + optional fraction
+      head + digits
+e.g.  "k" + "a3"          + "i"         ->  "ka3i"
+```
+
+- **The head character says how many digits the integer has**, so integers of different lengths still sort correctly as plain strings. Heads `i`..`z` mean 1..18 digits counting up from `i0`: `i0 < i1 < … < iz < j00 < … < jzz < k000`. Heads `h`..`0` mean 1..18 digits counting down below `i0`: `… < gzz < h0 < … < hz < i0`.
+- **On top** (`keyBetween(top, '')`): increment the integer and drop any fraction, since a bigger integer beats any fraction. **At the bottom**: decrement it. Keys grow logarithmically: 36 keys fit in 2 characters, 1,296 more in 3, 46,656 more in 4. 20,000 shapes on top (or at the bottom) stay at **4 characters**, against 3,334 before.
+- **Between two neighbours**: if the next integer up from `a` is still below `b`, use it; otherwise split the gap with the midpoint function above, applied to the fraction only.
+- The first key is `i0`. Edge case still to keep: a fraction must never end in `'0'`, otherwise nothing fits between `"i0k"` and `"i0k0"`.
+
+```ts
+keyBetween('', '');       // 'i0'    first shape
+keyBetween('i0', '');     // 'i1'    on top of it
+keyBetween('iz', '');     // 'j00'   integer of the next length
+keyBetween('', 'i0');     // 'hz'    below everything
+keyBetween('i0', 'i5');   // 'i1'    a free integer fits between
+keyBetween('i0', 'i1');   // 'i0i'   adjacent integers: use a fraction
+```
+
+Unit tests cover key length after 20,000 top and 20,000 bottom inserts, inserts between neighbours, and ordering staying correct under 5,000 random top/bottom/between inserts.
+
+**Concurrent inserts at the same spot.** Rudraksh and Priya both drop a shape between `i0` and `i1` at the same moment, and both compute `i0i`. Equal keys would make draw order depend on the client. Fix: sort by `(key, shapeId)`, so the shape ID breaks ties identically everywhere.
+
+**Key growth that remains.** Inserting again and again at the *same* spot between two neighbours still grows the fraction by about one character per 6 inserts (`i0i`, `i0r`, … ); that is inherent to any fractional index. It is rare in practice. If a key passes ~50 characters, rebalance: the server rewrites all keys evenly as one batch of updates.
 
 **Bonus:** the same technique orders anything people reorder together, such as layers, slides or kanban cards. Figma has written publicly about using it.
 

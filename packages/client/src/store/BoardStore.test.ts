@@ -60,7 +60,7 @@ describe('BoardStore: writes', () => {
     const early: UpdateOp = { kind: 'update', opId: 'p:2', stamp: { t: 2, client: 'p' }, id: 'p-1', props: { x: 3 } };
     s.receive([early]);
     expect(seen).toEqual([]);
-    s.receive([{ kind: 'create', opId: 'p:1', stamp: { t: 1, client: 'p' }, shape: { ...base, id: 'p-1', x: 0, y: 0, z: 'i' } }]);
+    s.receive([{ kind: 'create', opId: 'p:1', stamp: { t: 1, client: 'p' }, shape: { ...base, id: 'p-1', x: 0, y: 0, z: 'i0' } }]);
     const a = s.makeCreate({ ...base, x: 0, y: 0 });
     const b = s.makeCreate({ ...base, x: 0, y: 0 });
     s.submit([a, b]);
