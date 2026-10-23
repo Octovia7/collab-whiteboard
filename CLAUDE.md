@@ -76,7 +76,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Monorepo + shared core (clock, LWW board, tombstones, fractional index) + convergence test
 - [x] Canvas renderer + camera (pan, zoom-to-cursor, HiDPI)
 - [x] Quadtree, hit testing, select & shape tools
-- [ ] Server rooms + WebSocket sync (pending queue, acks, broadcast)
+- [x] Server rooms + WebSocket sync (pending queue, acks, broadcast)
 - [ ] Postgres persistence, snapshots, auth, roles
 - [ ] Pen tool (streaming, RDP, smoothing), eraser, presence
 - [ ] Undo/redo, sticky notes, reconnect + catch-up
