@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck, lint, unit, convergence, integration, E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      # Same host ports as docker-compose.yml, so the test configuration is identical.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: whiteboard
+          POSTGRES_PASSWORD: whiteboard
+          POSTGRES_DB: whiteboard
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U whiteboard"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["56379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm test:convergence
+      - run: pnpm test:integration
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          retention-days: 7
+
+  production-stack:
+    name: Production images + smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Secrets for this run only
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')"
+            echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=')"
+            echo "APP_ORIGIN=http://localhost:8080"
+            echo "APP_PORT=8080"
+            echo "COOKIE_SECURE=true"
+          } > .env.prod
+      - run: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --wait
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:smoke
+      - if: always()
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod logs --no-color > prod-stack.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-stack
+          path: |
+            prod-stack.log
+            test-results/
+          retention-days: 7
+      - if: always()
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod down -v
