@@ -1,11 +1,12 @@
 import type { Role } from '@whiteboard/shared';
 import { CLOSE } from '@whiteboard/shared';
 import type { FastifyBaseLogger } from 'fastify';
+import type { Metrics } from '../metrics';
 import type { OpStore } from '../persistence/OpStore';
 import type { Repo } from '../persistence/repo';
 import type { Snapshotter } from '../persistence/Snapshotter';
 import { Room } from './Room';
-import type { Peer } from './Room';
+import type { Peer, RoomObserver } from './Room';
 
 export interface RoomManagerDeps {
   repo: Repo;
@@ -14,6 +15,7 @@ export interface RoomManagerDeps {
   log: FastifyBaseLogger;
   unloadAfterMs: number;
   ackDelayMs?: number;
+  metrics?: Metrics;
 }
 
 /**
@@ -27,7 +29,17 @@ export class RoomManager {
   private readonly loading = new Map<string, Promise<Room>>();
   private readonly unloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  constructor(private readonly deps: RoomManagerDeps) {}
+  private readonly observer: RoomObserver | undefined;
+
+  constructor(private readonly deps: RoomManagerDeps) {
+    const m = deps.metrics;
+    this.observer = m && {
+      relayed: (ms) => m.opRelayMs.observe(ms),
+      committed: (ms) => m.opCommitMs.observe(ms),
+      accepted: (n) => m.opsAccepted.inc(n),
+      rejected: (reason) => m.opsRejected.inc({ reason }),
+    };
+  }
 
   get size(): number {
     return this.rooms.size;
@@ -94,16 +106,20 @@ export class RoomManager {
     const room = new Room(boardId, store, {
       onAccepted: (r, n) => snapshotter.noteOps(r, n),
       ackDelayMs: this.deps.ackDelayMs ?? 0,
+      observer: this.observer,
     });
     room.restore(saved.snapshot, saved.ops);
     // Seqs keep counting from the highest one ever assigned, so no seq is reused after a restart.
     const loggedMax = await repo.maxOpSeq(boardId);
     if (loggedMax > room.currentSeq) throw new Error(`board ${boardId}: log ahead of restored state`);
     this.rooms.set(boardId, room);
+    const loadMs = performance.now() - started;
+    this.deps.metrics?.boardLoadMs.observe(loadMs);
+    this.deps.metrics?.roomsLoaded.set(this.rooms.size);
     log.info(
       {
         boardId,
-        board_load_ms: Math.round((performance.now() - started) * 10) / 10,
+        board_load_ms: Math.round(loadMs * 10) / 10,
         snapshotSeq: saved.snapshot?.seq ?? 0,
         tailOps: saved.ops.length,
         shapes: room.shapeCount,
@@ -120,6 +136,7 @@ export class RoomManager {
     // Someone may have joined while the snapshot was being written; keep the room then.
     if (room.peerCount > 0) return;
     this.rooms.delete(room.boardId);
+    this.deps.metrics?.roomsLoaded.set(this.rooms.size);
     this.deps.log.info({ boardId: room.boardId }, 'board unloaded');
   }
 }

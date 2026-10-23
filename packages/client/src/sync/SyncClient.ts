@@ -1,4 +1,4 @@
-import { FINAL_CLOSE_CODES, LIMITS, parseServerMessage } from '@whiteboard/shared';
+import { FINAL_CLOSE_CODES, LIMITS, SERVICE_RESTART, parseServerMessage } from '@whiteboard/shared';
 import type { ClientMessage, Op, Role, ServerMessage } from '@whiteboard/shared';
 import { Emitter } from '../lib/Emitter';
 import type { BoardStore } from '../store/BoardStore';
@@ -8,6 +8,13 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'di
 
 /** Reconnect delays (system-design.md, "SyncClient"): 0.5 s, 1 s, 2 s, ... capped at 10 s. */
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 10_000];
+
+/**
+ * Flow control: at most this many ops sent but not yet acked. More wait in the outbox and go
+ * out as acks arrive, so a big paste or a long offline queue never trips the server's per-user
+ * rate limit (system-design.md: 200 ops/s, bursts of 1,000).
+ */
+const MAX_IN_FLIGHT = 500;
 
 export interface SyncOptions {
   /** Full WebSocket URL including ?board=. */
@@ -106,8 +113,9 @@ export class SyncClient {
   flush(): void {
     const socket = this.socket;
     if (!this.welcomed || !socket || socket.readyState !== socket.OPEN) return;
-    while (this.outbox.length > 0) {
-      const batch = this.outbox.splice(0, LIMITS.maxOpsPerBatch);
+    while (this.outbox.length > 0 && this.pending.size < MAX_IN_FLIGHT) {
+      const room = MAX_IN_FLIGHT - this.pending.size;
+      const batch = this.outbox.splice(0, Math.min(LIMITS.maxOpsPerBatch, room));
       for (const op of batch) this.pending.set(op.opId, op);
       this.send({ t: 'ops', ops: batch });
     }
@@ -141,7 +149,12 @@ export class SyncClient {
       }
       // Anything else (network drop, server restart): keep every unacked op and try again.
       this.setStatus('reconnecting');
-      const delay = BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)] as number;
+      // A graceful restart (1012) means "come straight back"; jitter spreads a whole board's
+      // worth of clients over half a second instead of all at once.
+      const delay =
+        e.code === SERVICE_RESTART && this.attempts === 0
+          ? 100 + Math.random() * 500
+          : (BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)] as number);
       this.attempts++;
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
@@ -177,6 +190,7 @@ export class SyncClient {
       case 'ack':
         for (const id of msg.opIds) this.pending.delete(id);
         this.lastSeq = Math.max(this.lastSeq, msg.seq);
+        this.flush(); // room in the in-flight window again
         return;
       case 'reject': {
         const op = this.pending.get(msg.opId);

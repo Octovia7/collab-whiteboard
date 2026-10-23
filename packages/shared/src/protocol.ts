@@ -119,6 +119,9 @@ export const CLOSE = {
 } as const;
 export const FINAL_CLOSE_CODES: readonly number[] = Object.values(CLOSE);
 
+/** Graceful server shutdown: reconnect right away (with a little jitter) instead of backing off. */
+export const SERVICE_RESTART = 1012;
+
 // The server is trusted for board content, so snapshots get a structural check only:
 // deep-validating 10,000 shapes on every join would cost more than it protects.
 const snapshotSchema = z.custom<BoardSnapshot>(
