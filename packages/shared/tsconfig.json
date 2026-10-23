@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // No DOM lib and no Node types: shared must run anywhere (CLAUDE.md rule 11).
+    "lib": ["ES2022"],
+    "types": []
+  },
+  "include": ["src"]
+}
