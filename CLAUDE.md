@@ -74,7 +74,7 @@ Build milestones in this order; tick them off as they're finished.
 
 - [x] Monorepo + shared core (clock, LWW board, tombstones, fractional index) + convergence test
 - [x] Canvas renderer + camera (pan, zoom-to-cursor, HiDPI)
-- [ ] Quadtree, hit testing, select & shape tools
+- [x] Quadtree, hit testing, select & shape tools
 - [ ] Server rooms + WebSocket sync (pending queue, acks, broadcast)
 - [ ] Postgres persistence, snapshots, auth, roles
 - [ ] Pen tool (streaming, RDP, smoothing), eraser, presence
@@ -99,13 +99,9 @@ Milestone 2 done and merged: client package, Camera, Renderer (two layers, draw 
 rect/ellipse/arrow drawing, demo shapes (`?demo=N`). Checked in the browser, including `?demo=20000`.
 Vite falls back to port 5174 when 5173 is taken.
 
-Milestone 3 (branch `milestone-3-tools`, uncommitted, waiting for the browser check): quadtree culling + hit testing,
-select tool (click, shift-click, drag-move, handle resize, box-select), rect/ellipse/arrow tools, toolbar, colors,
-front/back, delete. All local edits go through `BoardStore.submit()` (emits `submit` for sync/undo later); remote ops
-through `receive()`. Handles 8 px and hit tolerance 6 px in screen pixels, divided by zoom. Drag sends one update per
-pointer move; merging same-shape updates every 50 ms is the sync outbox's job (milestone 4).
-
-Open question (shared/fractional.ts, algorithms.md §5): `keyBetween(top, '')` grows the key by one char every ~6
-appends, so "new shape on top" gives 50-char keys after 300 shapes and 3,334 after 20,000 (`?demo=20000` seeds in
-2.2 s). Proposed fix: variable-length integer head (as in the `fractional-indexing` package, written ourselves),
-making end-appends grow logarithmically.
+Milestone 3 done and merged (checked in the browser): quadtree culling + hit testing, select tool (click, shift-click,
+drag-move, handle resize, box-select), rect/ellipse/arrow tools, toolbar, colors, front/back, delete. All local edits go
+through `BoardStore.submit()` (emits `submit` for sync/undo later); remote ops through `receive()`. Handles 8 px and hit
+tolerance 6 px in screen pixels, divided by zoom. Drag sends one update per pointer move; merging same-shape updates
+every 50 ms is the sync outbox's job (milestone 4).
+- Z keys are integer part + fraction (algorithms.md §5): 4 chars after 20,000 top inserts (was 3,334); first key `i0`.
