@@ -48,3 +48,66 @@ body,
 .zoom-controls button:hover {
   background: #f1f3f5;
 }
+
+.toolbar {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+  font-size: 13px;
+  user-select: none;
+}
+
+.toolbar button {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.toolbar button:hover:not(:disabled) {
+  background: #f1f3f5;
+}
+
+.toolbar button.active {
+  background: #e7f5ff;
+  color: #1971c2;
+}
+
+.toolbar button:disabled {
+  color: #adb5bd;
+  cursor: default;
+}
+
+.toolbar .swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin: 0 2px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.toolbar .swatch.active {
+  outline: 2px solid #4dabf7;
+  outline-offset: 1px;
+}
+
+.toolbar .divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: #dee2e6;
+}

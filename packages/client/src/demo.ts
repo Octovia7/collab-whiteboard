@@ -16,15 +16,18 @@ export function seedDemo(store: BoardStore, count: number): void {
     const row = Math.floor(i / cols);
     const type = TYPES[i % TYPES.length] as ShapeType;
     const size = 60 + ((i * 37) % 50);
-    store.create({
-      type,
-      x: col * CELL,
-      y: row * CELL,
-      w: size,
-      // Alternate arrow directions so negative w/h get exercised too.
-      h: type === 'arrow' && i % 2 === 0 ? -size * 0.6 : size * 0.7,
-      color: COLORS[i % COLORS.length] as string,
-    });
+    // One submit per shape: makeCreate reads topZ, so each create must land before the next.
+    store.submit([
+      store.makeCreate({
+        type,
+        x: col * CELL,
+        y: row * CELL,
+        w: size,
+        // Alternate arrow directions so negative w/h get exercised too.
+        h: type === 'arrow' && i % 2 === 0 ? -size * 0.6 : size * 0.7,
+        color: COLORS[i % COLORS.length] as string,
+      }),
+    ]);
   }
 }
 
