@@ -5,9 +5,12 @@ import type { OpStore, StoredOp } from '../persistence/OpStore';
 import { Room } from './Room';
 import type { Peer } from './Room';
 
-function peer(userId: string, role: Role = 'editor'): Peer & { inbox: ServerMessage[] } {
+function peer(userId: string, role: Role = 'editor'): Peer & { inbox: ServerMessage[]; closed: number | null } {
   const inbox: ServerMessage[] = [];
-  return { userId, role, inbox, send: (m) => inbox.push(m) };
+  const p = { userId, role, inbox, closed: null as number | null, send: (m: ServerMessage) => void inbox.push(m), close: (code: number) => {
+    p.closed = code;
+  } };
+  return p;
 }
 
 const stamp = (t: number) => ({ t, client: 'c' });
@@ -135,5 +138,59 @@ describe('Room', () => {
     await room.handleOps(a, [update('c-1', 2, 5)]);
     expect(a.inbox).toEqual([expect.objectContaining({ t: 'reject', reason: 'forbidden' })]);
     expect(room.currentSeq).toBe(1);
+  });
+});
+
+describe('Room: persistence and membership', () => {
+  it('restores from a snapshot plus tail ops: same board, seq, creators, and dedupe', async () => {
+    const store = new MemoryOpStore();
+    const live = new Room('b', store);
+    const a = peer('ua');
+    live.join(a);
+    await live.handleOps(a, [create('k-1', 1, 'stroke'), create('r-1', 2)]);
+    const snapshot = { seq: live.currentSeq, state: live.persistentState() };
+    await live.handleOps(a, [update('r-1', 3, 9)]);
+
+    const restored = new Room('b', new MemoryOpStore());
+    restored.restore(snapshot, store.ops.filter((o) => o.seq > snapshot.seq));
+    expect(restored.snapshot()).toEqual(live.snapshot());
+    expect(restored.currentSeq).toBe(3);
+
+    const again = peer('ua');
+    restored.join(again);
+    // The stroke's creator survived the snapshot, so ua may still append and others may not.
+    await restored.handleOps(again, [append('k-1', 4)]);
+    expect(again.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-a-4'], seq: 4 });
+    const other = peer('ub');
+    restored.join(other);
+    await restored.handleOps(other, [append('k-1', 5)]);
+    expect(other.inbox.at(-1)).toMatchObject({ t: 'reject', reason: 'not_author' });
+    // A tail op resent after the restart is acked with its original seq, not re-stored.
+    await restored.handleOps(again, [update('r-1', 3, 9)]);
+    expect(again.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-u-3'], seq: 3 });
+  });
+
+  it('setRole pushes the new role and applies it to the next batch', async () => {
+    const room = new Room('b', new MemoryOpStore());
+    const a = peer('ua', 'viewer');
+    room.join(a);
+    room.setRole('ua', 'editor');
+    expect(a.inbox.at(-1)).toEqual({ t: 'role', role: 'editor' });
+    await room.handleOps(a, [create('c-1', 1)]);
+    expect(a.inbox.at(-1)).toMatchObject({ t: 'ack' });
+  });
+
+  it('disconnect closes one user, or everyone', () => {
+    const room = new Room('b', new MemoryOpStore());
+    const a = peer('ua');
+    const b = peer('ub');
+    room.join(a);
+    room.join(b);
+    room.disconnect('ub', 4003, 'removed_from_board');
+    expect([a.closed, b.closed]).toEqual([null, 4003]);
+    expect(room.peerCount).toBe(1);
+    room.disconnect(null, 4004, 'board_deleted');
+    expect(a.closed).toBe(4004);
+    expect(room.peerCount).toBe(0);
   });
 });

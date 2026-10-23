@@ -6,7 +6,8 @@ services:
       POSTGRES_PASSWORD: whiteboard
       POSTGRES_DB: whiteboard
     ports:
-      - "5432:5432"
+      # Host port 55432: this machine already runs a local PostgreSQL on 5432 (and something on 5433).
+      - "55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "56379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

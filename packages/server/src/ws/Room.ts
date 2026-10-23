@@ -1,14 +1,23 @@
 import { Board } from '@whiteboard/shared';
 import type { BoardSnapshot, Op, Role, ServerMessage, ShapeId } from '@whiteboard/shared';
-import type { OpStore } from '../persistence/OpStore';
+import type { SnapshotState } from '../db/schema';
+import type { OpStore, StoredOp } from '../persistence/OpStore';
 
 /** One connected socket, as the room sees it. */
 export interface Peer {
   readonly userId: string;
-  /** Mutable: role changes reach open sockets (milestone 5). */
+  /** Mutable: a role change reaches open sockets on their next batch (setRole). */
   role: Role;
   /** Must be a no-op once the socket has closed. */
   send(msg: ServerMessage): void;
+  close(code: number, reason: string): void;
+}
+
+export interface RoomOptions {
+  /** Called after ops are accepted, so the Snapshotter can count them. */
+  onAccepted?: (room: Room, count: number) => void;
+  /** Fault injection (tests only): wait this long between commit and ack. */
+  ackDelayMs?: number;
 }
 
 interface Accepted {
@@ -16,6 +25,8 @@ interface Accepted {
   /** Resolves once the op is durable; a resent duplicate waits on the original's commit. */
   committed: Promise<void>;
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * One board in server memory: its LWW state, connected peers and the op pipeline
@@ -35,11 +46,35 @@ export class Room {
   /** Who created each shape: only a stroke's creator may append to it. */
   private readonly creators = new Map<ShapeId, string>();
   private readonly peers = new Set<Peer>();
+  /** Snapshot bookkeeping, owned by the Snapshotter. */
+  readonly snapshots = { lastSeq: 0, previousSeq: 0, opsSince: 0, running: false, timer: null as ReturnType<typeof setTimeout> | null };
 
   constructor(
     readonly boardId: string,
     private readonly store: OpStore,
+    private readonly options: RoomOptions = {},
   ) {}
+
+  /**
+   * Rebuilds the room from its latest snapshot plus the ops logged after it. Tail ops are
+   * already durable, so a client resending one of them gets acked without a second insert.
+   */
+  restore(snapshot: { seq: number; state: SnapshotState } | null, tail: StoredOp[]): void {
+    if (snapshot) {
+      this.board.loadSnapshot(snapshot.state.board);
+      for (const [id, user] of Object.entries(snapshot.state.creators)) this.creators.set(id, user);
+      this.seq = snapshot.seq;
+      this.snapshots.lastSeq = snapshot.seq;
+    }
+    const durable = Promise.resolve();
+    for (const row of tail) {
+      this.board.apply(row.op);
+      if (row.op.kind === 'create' && !this.creators.has(row.op.shape.id)) this.creators.set(row.op.shape.id, row.userId);
+      this.accepted.set(row.opId, { seq: row.seq, committed: durable });
+      this.seq = Math.max(this.seq, row.seq);
+    }
+    this.snapshots.opsSince = tail.length;
+  }
 
   get peerCount(): number {
     return this.peers.size;
@@ -49,9 +84,18 @@ export class Room {
     return this.seq;
   }
 
-  /** The room's current board (milestone 5's Snapshotter persists this). */
+  get shapeCount(): number {
+    return this.board.ids().length;
+  }
+
+  /** The room's current board. */
   snapshot(): BoardSnapshot {
     return this.board.snapshot();
+  }
+
+  /** What the Snapshotter persists: the board plus shape creators. */
+  persistentState(): SnapshotState {
+    return { board: this.board.snapshot(), creators: Object.fromEntries(this.creators) };
   }
 
   /** Adds a peer and returns its welcome: the full board and the seq it covers. */
@@ -62,6 +106,25 @@ export class Room {
 
   leave(peer: Peer): void {
     this.peers.delete(peer);
+  }
+
+  /** A role change takes effect on the user's open sockets immediately: their next batch is checked against it. */
+  setRole(userId: string, role: Role): void {
+    for (const peer of this.peers) {
+      if (peer.userId !== userId) continue;
+      peer.role = role;
+      peer.send({ t: 'role', role });
+    }
+  }
+
+  /** Closes a user's sockets (removed from the board), or everyone's (board deleted). */
+  disconnect(userId: string | null, code: number, reason: string): void {
+    for (const peer of [...this.peers]) {
+      if (userId !== null && peer.userId !== userId) continue;
+      peer.send({ t: 'error', code: reason, message: reason.replace(/_/g, ' ') });
+      peer.close(code, reason);
+      this.peers.delete(peer);
+    }
   }
 
   async handleOps(from: Peer, ops: Op[]): Promise<void> {
@@ -109,11 +172,13 @@ export class Room {
       );
       for (const { op, seq } of fresh) this.accepted.set(op.opId, { seq, committed });
       waits.push(committed);
+      this.options.onAccepted?.(this, fresh.length);
     }
 
     if (ackIds.length === 0) return;
     // If persisting fails, no ack is sent: the client keeps the ops pending and resends them.
     await Promise.all(waits);
+    if (this.options.ackDelayMs) await sleep(this.options.ackDelayMs); // fault injection (tests only)
     from.send({ t: 'ack', opIds: ackIds, seq: ackSeq });
   }
 
