@@ -208,7 +208,7 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 | `welcome` | `you, role, peers[]` + either `snapshot, seq` or `ops[]` (catch-up) | Reply to `hello` |
 | `ops` | `ops: Op[], seq` | Ops from other users, with the highest seq included |
 | `ack` | `opIds[], seq` | Your ops were accepted and logged |
-| `reject` | `opId, reason, shape?` | Op refused; `shape` is the server's current version for rollback |
+| `reject` | `opId, reason, shape` | Op refused; `shape` is the server's stored registers for that shape (values *with* their stamps, in snapshot form) or `null` if the server has no such shape. See "Rollback" below |
 | `peer-join` / `peer-leave` | `user` | Online list changes |
 | `cursor` / `select` | `userId, …` | Other users' presence |
 | `error` | `code, message` | e.g. `forbidden`, `board_not_found`; socket then closes |
@@ -223,6 +223,8 @@ type Op =
 // delete = update { deleted: true }
 // append: `chunk` is the author's per-stroke chunk number (0, 1, 2...); see algorithms.md §7a
 ```
+
+**Rollback.** The rejected op was applied optimistically with a fresh stamp, newer than anything the server holds, so merging the server's values with LWW would keep the bad value. The client instead overwrites that one shape with the server's registers (or removes it if `shape` is `null`). It then re-applies its other still-unacked ops for the same shape, because the server's copy predates them (they may have been sent later in the same batch). If one of those is rejected too, its own reject rolls it back in turn.
 
 **Sizes and limits**
 
