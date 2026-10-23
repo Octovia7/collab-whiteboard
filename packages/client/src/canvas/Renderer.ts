@@ -130,7 +130,9 @@ export class Renderer {
     ctx.setTransform(...this.camera.transform(this.dpr));
     const view = this.camera.viewport(this.cssWidth, this.cssHeight);
     drawGrid(ctx, view, this.camera.zoom);
-    for (const shape of this.store.visibleIn(view)) drawShape(ctx, shape);
+    for (const shape of this.store.visibleIn(view)) {
+      drawShape(ctx, shape, shape.type === 'stroke' ? this.store.strokePoints(shape.id) : undefined);
+    }
   }
 
   private drawOverlay(): void {

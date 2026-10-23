@@ -1,3 +1,4 @@
+import type { Point } from '@whiteboard/shared';
 import type { ToolController } from '../tools/ToolController';
 import type { Camera } from './Camera';
 import { isTyping } from './PanZoomInput';
@@ -16,6 +17,8 @@ export class ToolInput {
     private readonly camera: Camera,
     private readonly tools: ToolController,
     private readonly panZoom: PanZoomInput,
+    /** Every pointer position over the board, pressed or not (presence cursor). */
+    private readonly onCursor: (p: Point) => void = () => {},
   ) {}
 
   attach(): () => void {
@@ -24,6 +27,7 @@ export class ToolInput {
     el.addEventListener('pointermove', this.onPointerMove);
     el.addEventListener('pointerup', this.onPointerUp);
     el.addEventListener('pointercancel', this.onPointerCancel);
+    el.addEventListener('pointerleave', this.onPointerLeave);
     window.addEventListener('keydown', this.onKeyDown);
     const offTool = this.tools.events.on('change', () => this.panZoom.setBaseCursor(this.tools.cursor));
     this.panZoom.setBaseCursor(this.tools.cursor);
@@ -32,6 +36,7 @@ export class ToolInput {
       el.removeEventListener('pointermove', this.onPointerMove);
       el.removeEventListener('pointerup', this.onPointerUp);
       el.removeEventListener('pointercancel', this.onPointerCancel);
+      el.removeEventListener('pointerleave', this.onPointerLeave);
       window.removeEventListener('keydown', this.onKeyDown);
       offTool();
     };
@@ -51,8 +56,14 @@ export class ToolInput {
   };
 
   private onPointerMove = (e: PointerEvent) => {
-    if (e.pointerId !== this.activePointer) return;
-    this.tools.pointerMove(this.toWorld(e), e);
+    const p = this.toWorld(e);
+    this.onCursor(p);
+    if (this.activePointer === null) this.tools.pointerHover(p);
+    else if (e.pointerId === this.activePointer) this.tools.pointerMove(p, e);
+  };
+
+  private onPointerLeave = () => {
+    if (this.activePointer === null) this.tools.pointerHover(null);
   };
 
   private onPointerUp = (e: PointerEvent) => {

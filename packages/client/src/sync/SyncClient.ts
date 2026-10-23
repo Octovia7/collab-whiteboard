@@ -1,7 +1,8 @@
-import { FINAL_CLOSE_CODES, LIMITS, SERVICE_RESTART, parseServerMessage } from '@whiteboard/shared';
+import { FINAL_CLOSE_CODES, LIMITS, PRESENCE, SERVICE_RESTART, parseServerMessage } from '@whiteboard/shared';
 import type { ClientMessage, Op, Role, ServerMessage } from '@whiteboard/shared';
 import { Emitter } from '../lib/Emitter';
 import type { BoardStore } from '../store/BoardStore';
+import type { Presence } from '../store/Presence';
 import { enqueueCoalesced } from './coalesce';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -22,8 +23,12 @@ export interface SyncOptions {
   boardId: string;
   /** How long local ops collect before being sent as one batch. */
   flushMs?: number;
+  /** Send a ping after this long with nothing else sent (default PRESENCE.heartbeatMs, 5 s). */
+  heartbeatMs?: number;
   /** Injected for tests; defaults to the global WebSocket (browser, or Node 22). */
   WebSocketImpl?: typeof WebSocket;
+  /** Where other people's cursors and selections go. */
+  presence?: Presence;
 }
 
 /**
@@ -56,6 +61,13 @@ export class SyncClient {
   private stopped = false;
   /** Why the server closed us for good (board deleted, removed), if it did. */
   private finalReason: string | null = null;
+  // Presence out: latest cursor waiting for its 50 ms slot, last selection sent, heartbeat clock.
+  private pendingCursor: { x: number; y: number } | null = null;
+  private cursorTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastCursorSent = 0;
+  private lastSelection = '';
+  private lastSentAt = 0;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly store: BoardStore,
@@ -89,6 +101,12 @@ export class SyncClient {
 
   start(): void {
     this.stopped = false;
+    // Heartbeat (algorithms.md §8): if nothing else went out for a while, say we're still here,
+    // so the server doesn't drop us as a closed laptop lid.
+    const heartbeatMs = this.options.heartbeatMs ?? PRESENCE.heartbeatMs;
+    this.heartbeat = setInterval(() => {
+      if (this.welcomed && performance.now() - this.lastSentAt >= heartbeatMs) this.send({ t: 'ping' });
+    }, heartbeatMs / 2);
     this.offSubmit = this.store.events.on('submit', ({ ops }) => {
       for (const op of ops) enqueueCoalesced(this.outbox, op);
       this.scheduleFlush();
@@ -98,6 +116,10 @@ export class SyncClient {
 
   stop(): void {
     this.stopped = true;
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.heartbeat = null;
+    if (this.cursorTimer) clearTimeout(this.cursorTimer);
+    this.cursorTimer = null;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.offSubmit?.();
@@ -107,6 +129,33 @@ export class SyncClient {
     const socket = this.socket;
     this.socket = null;
     socket?.close();
+  }
+
+  /**
+   * My pointer moved (world coordinates). Sent at most every 50 ms; the latest position always
+   * goes out, so a cursor that stops between ticks still lands where it stopped. Dropped while
+   * disconnected: presence is ephemeral, the next move after reconnecting replaces it.
+   */
+  sendCursor(x: number, y: number): void {
+    this.pendingCursor = { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 };
+    if (this.cursorTimer) return;
+    const wait = Math.max(0, PRESENCE.cursorIntervalMs - (performance.now() - this.lastCursorSent));
+    this.cursorTimer = setTimeout(() => {
+      this.cursorTimer = null;
+      const c = this.pendingCursor;
+      this.pendingCursor = null;
+      if (!c || !this.welcomed) return;
+      this.lastCursorSent = performance.now();
+      this.send({ t: 'cursor', x: c.x, y: c.y });
+    }, wait);
+  }
+
+  /** My selection changed; sent only when it actually differs from the last one sent. */
+  sendSelection(ids: readonly string[]): void {
+    const key = [...ids].sort().join(',');
+    if (key === this.lastSelection) return;
+    this.lastSelection = key;
+    if (this.welcomed) this.send({ t: 'select', ids: [...ids].slice(0, LIMITS.maxSelectedIds) });
   }
 
   /** Sends everything queued now instead of waiting for the timer. */
@@ -141,6 +190,7 @@ export class SyncClient {
       if (this.socket !== socket || this.stopped) return; // stopped, or replaced by a newer socket
       this.welcomed = false;
       this.socket = null;
+      this.options.presence?.clear();
       if (FINAL_CLOSE_CODES.includes(e.code)) {
         // The server ended this for good (board deleted, removed, protocol violation).
         this.finalReason = e.reason || 'closed';
@@ -178,6 +228,9 @@ export class SyncClient {
         this.welcomed = true;
         this.attempts = 0;
         this.setRole(msg.role);
+        this.options.presence?.reset(msg.you, msg.peers);
+        // Re-announce my selection to the (possibly new) room.
+        if (this.lastSelection) this.send({ t: 'select', ids: this.lastSelection.split(',') });
         this.setStatus('connected');
         this.events.emit('welcome', undefined);
         this.flush();
@@ -209,6 +262,18 @@ export class SyncClient {
       case 'role':
         this.setRole(msg.role);
         return;
+      case 'peer-join':
+        this.options.presence?.join(msg.peer);
+        return;
+      case 'peer-leave':
+        this.options.presence?.leave(msg.peerId);
+        return;
+      case 'cursor':
+        this.options.presence?.cursor(msg.peerId, msg.x, msg.y);
+        return;
+      case 'select':
+        this.options.presence?.select(msg.peerId, msg.ids);
+        return;
       case 'error':
         console.error(`sync: server error ${msg.code}: ${msg.message}`);
         return; // the server closes the socket next; onclose updates the status
@@ -224,7 +289,10 @@ export class SyncClient {
   }
 
   private send(msg: ClientMessage): void {
-    this.socket?.send(JSON.stringify(msg));
+    const socket = this.socket;
+    if (!socket || socket.readyState !== socket.OPEN) return;
+    socket.send(JSON.stringify(msg));
+    this.lastSentAt = performance.now();
   }
 
   private setRole(role: Role): void {

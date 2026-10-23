@@ -52,8 +52,8 @@ body,
 .toolbar {
   position: fixed;
   top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Left-anchored: the header (title, online list, user) takes the top right. */
+  left: 16px;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -264,4 +264,29 @@ button.link {
 .page .role {
   color: #868e96;
   font-size: 12px;
+}
+
+.online {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.online li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.online .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }
