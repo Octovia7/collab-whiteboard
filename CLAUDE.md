@@ -73,7 +73,7 @@ Update this section at the end of each session: what's done, what's next, known 
 Build milestones in this order; tick them off as they're finished.
 
 - [x] Monorepo + shared core (clock, LWW board, tombstones, fractional index) + convergence test
-- [ ] Canvas renderer + camera (pan, zoom-to-cursor, HiDPI)
+- [x] Canvas renderer + camera (pan, zoom-to-cursor, HiDPI)
 - [ ] Quadtree, hit testing, select & shape tools
 - [ ] Server rooms + WebSocket sync (pending queue, acks, broadcast)
 - [ ] Postgres persistence, snapshots, auth, roles
@@ -95,6 +95,9 @@ Decisions (also in the docs):
 
 Workflow: one branch per milestone (`milestone-N-name`), merged to main only after I've checked it.
 
-Milestone 2 (branch `milestone-2-canvas`, committed, not merged): client package, Camera, Renderer (two layers, draw on
-demand, HiDPI), pan/zoom input, rect/ellipse/arrow drawing, BoardStore with linear-scan culling, demo shapes (`?demo=N`).
-Waiting for the browser check before merging and ticking. Vite falls back to port 5174 when 5173 is taken.
+Milestone 2 done and merged: client package, Camera, Renderer (two layers, draw on demand, HiDPI), pan/zoom input,
+rect/ellipse/arrow drawing, demo shapes (`?demo=N`). Checked in the browser, including `?demo=20000`.
+Vite falls back to port 5174 when 5173 is taken.
+
+Next: milestone 3 on `milestone-3-tools`. All tool edits go through `BoardStore.submit()` (sync and undo hook in there);
+resize handles are 8 px and hit-test tolerance 6 px in screen pixels, divided by zoom for world units.
