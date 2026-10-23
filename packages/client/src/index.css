@@ -100,6 +100,11 @@ body,
   background-clip: padding-box;
 }
 
+.toolbar .swatch:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .toolbar .swatch.active {
   outline: 2px solid #4dabf7;
   outline-offset: 1px;

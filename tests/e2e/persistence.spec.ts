@@ -190,38 +190,76 @@ test.describe('3. a crash between sending an edit and its ack loses nothing and 
   });
 });
 
-test('4. viewers see edits live but their edits are rejected; a role change applies without reconnecting', async ({ browser }) => {
+test('4. viewers get a read-only UI and see edits live; the server rejects their ops; role changes apply live', async ({ browser }) => {
   const t = await openTabs(browser, 1);
   const owner = t.page(0);
-  const viewer = await joinTab(browser, t.boardId, t.owner, 'viewer');
-  await expect(viewer.getByText('View only')).toBeVisible();
-
-  // Live edits reach the viewer.
   const rect = await drawShape(owner, 'Rectangle', { x: 300, y: 250 }, { x: 460, y: 360 });
-  await expect.poll(async () => (await shapeById(viewer, rect.id))?.type).toBe('rect');
+  const viewer = await joinTab(browser, t.boardId, t.owner, 'viewer');
 
-  // The viewer draws: it appears optimistically, then the reject rolls it back.
-  await viewer.getByRole('button', { name: 'Ellipse', exact: true }).click();
-  await drag(viewer, { x: 600, y: 250 }, { x: 760, y: 380 });
-  await expect.poll(async () => (await shapes(viewer)).map((s) => s.id)).toEqual([rect.id]);
-  // The viewer moves the owner's rectangle: it snaps back.
+  // Read-only mode: badge shown, drawing tools, colors and actions disabled.
+  await expect(viewer.getByText('View only')).toBeVisible();
+  await expect.poll(() => viewer.evaluate(() => window.__board?.readOnly())).toBe(true);
+  for (const name of ['Rectangle', 'Ellipse', 'Arrow', 'Front', 'Back', 'Delete']) {
+    await expect(viewer.getByRole('button', { name, exact: true })).toBeDisabled();
+  }
+  await expect(viewer.getByRole('button', { name: 'Color #e03131' })).toBeDisabled();
+
+  // Clicking a shape selects nothing (no handles); dragging and shortcuts change nothing.
   const grab = await outlinePoint(viewer, rect);
+  await viewer.mouse.click(grab.x, grab.y);
+  expect(await viewer.evaluate(() => window.__board?.selection())).toEqual([]);
   await drag(viewer, grab, { x: grab.x + 100, y: grab.y + 50 });
-  await expect.poll(async () => (await shapeById(viewer, rect.id))?.x).toBe(rect.x);
-  await expect.poll(() => unacked(viewer)).toBe(0);
-  expect((await shapes(owner)).map((s) => s.id)).toEqual([rect.id]);
-  expect((await shapeById(owner, rect.id))?.x).toBe(rect.x);
+  await drag(viewer, { x: 600, y: 250 }, { x: 760, y: 380 });
+  for (const key of ['r', 'o', 'a', 'Delete', ']']) await viewer.keyboard.press(key);
+  expect(await viewer.evaluate(() => window.__board?.tool())).toBe('select');
+  expect(await unacked(viewer)).toBe(0); // nothing was even sent
+  expect(await shapes(viewer)).toEqual(await shapes(owner));
   await viewer.screenshot({ path: 'test-results/screens/m5-viewer.png' });
 
-  // Promote the viewer over REST. Same page, same socket: no reload, no reconnect.
+  // Pan and zoom still work.
+  const cam = await viewer.evaluate(() => window.__board?.camera());
+  await viewer.mouse.move(640, 400);
+  await viewer.mouse.wheel(0, -300);
+  await expect.poll(async () => (await viewer.evaluate(() => window.__board?.camera()))?.zoom).toBeGreaterThan(cam?.zoom ?? 1);
+  await viewer.keyboard.down('Space');
+  await drag(viewer, { x: 600, y: 400 }, { x: 700, y: 400 });
+  await viewer.keyboard.up('Space');
+  expect((await viewer.evaluate(() => window.__board?.camera()))?.x).not.toBe(cam?.x);
+
+  // Live edits still reach the viewer.
+  const ellipse = await drawShape(owner, 'Ellipse', { x: 600, y: 250 }, { x: 760, y: 380 });
+  await expect.poll(async () => (await shapeById(viewer, ellipse.id))?.type).toBe('ellipse');
+
+  // A modified client can't bypass the UI: an op sent on the viewer's own session is rejected.
+  const viewerContext = viewer.context();
+  const ws = await rawSocket(viewerContext, t.boardId);
+  const replies: ServerMessage[] = [];
+  ws.on('message', (d) => replies.push(JSON.parse(String(d)) as ServerMessage));
+  await new Promise((r) => ws.once('open', r));
+  ws.send(JSON.stringify({ t: 'hello', boardId: t.boardId, lastSeq: 0 }));
+  await expect.poll(() => replies.some((m) => m.t === 'welcome')).toBe(true);
+  ws.send(JSON.stringify({ t: 'ops', ops: [{ kind: 'update', opId: 'hack:1', stamp: { t: 999, client: 'hack' }, id: rect.id, props: { x: 5000 } }] }));
+  await expect.poll(() => replies.find((m) => m.t === 'reject')).toMatchObject({ opId: 'hack:1', reason: 'forbidden' });
+  ws.close();
+  expect((await shapeById(owner, rect.id))?.x).toBe(rect.x);
+
+  // Promote: read-only mode ends live, on the same page and socket, and edits go through.
   const members = (await (await t.owner.request.get(`/api/boards/${t.boardId}/members`)).json()) as { members: { id: string; role: string }[] };
   const viewerId = members.members.find((m) => m.role === 'viewer')?.id;
   const clientBefore = await viewer.evaluate(() => window.__board?.clientId);
-  const res = await t.owner.request.patch(`/api/boards/${t.boardId}/members/${viewerId}`, { data: { role: 'editor' } });
-  expect(res.status()).toBe(204);
+  const promote = await t.owner.request.patch(`/api/boards/${t.boardId}/members/${viewerId}`, { data: { role: 'editor' } });
+  expect(promote.status()).toBe(204);
   await expect(viewer.getByText('View only')).toBeHidden();
-  const ellipse = await drawShape(viewer, 'Ellipse', { x: 600, y: 250 }, { x: 760, y: 380 });
-  await expect.poll(async () => (await shapeById(owner, ellipse.id))?.type).toBe('ellipse');
+  await expect(viewer.getByRole('button', { name: 'Rectangle', exact: true })).toBeEnabled();
+  const arrow = await drawShape(viewer, 'Arrow', { x: 300, y: 500 }, { x: 520, y: 580 });
+  await expect.poll(async () => (await shapeById(owner, arrow.id))?.type).toBe('arrow');
+  expect(await viewer.evaluate(() => window.__board?.selection())).toEqual([arrow.id]);
+
+  // Demote again: back to read-only live, and the selection is dropped.
+  await t.owner.request.patch(`/api/boards/${t.boardId}/members/${viewerId}`, { data: { role: 'viewer' } });
+  await expect(viewer.getByText('View only')).toBeVisible();
+  expect(await viewer.evaluate(() => window.__board?.selection())).toEqual([]);
+  await expect(viewer.getByRole('button', { name: 'Rectangle', exact: true })).toBeDisabled();
   await expectConverged([owner, viewer]);
   expect(await viewer.evaluate(() => window.__board?.clientId)).toBe(clientBefore);
 });

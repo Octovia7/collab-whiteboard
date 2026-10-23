@@ -175,3 +175,42 @@ describe('selection actions', () => {
     expect(t.tools.keyDown({ key: 'r', ctrlKey: true, metaKey: false, altKey: false })).toBe(false); // leave Ctrl+R to the browser
   });
 });
+
+describe('read-only (viewer) mode', () => {
+  it('ignores pointer input, tool switches, colors and edit shortcuts', () => {
+    const t = setup();
+    const id = drawRect(t, { x: 0, y: 0 }, { x: 100, y: 100 });
+    t.tools.setReadOnly(true);
+    expect(t.selection.size).toBe(0); // entering read-only clears the selection
+    t.batches.length = 0;
+
+    t.drag({ x: 1, y: 50 }, { x: 60, y: 80 }); // would select and move
+    expect(t.selection.size).toBe(0);
+    for (const k of ['r', 'o', 'a', 'Delete', ']', '[']) expect(t.key(k)).toBe(false);
+    t.tools.setTool('rect');
+    t.tools.setColor('#e03131');
+    t.tools.deleteSelection();
+    t.tools.bringToFront();
+    expect(t.tools.tool).toBe('select');
+    expect(t.batches).toEqual([]); // not a single op left the tools
+    expect(t.store.get(id)).toMatchObject({ x: 0, y: 0, color: '#1e1e1e' });
+  });
+
+  it('cancels a gesture in progress when the role drops mid-drag, and switches back live', () => {
+    const t = setup();
+    t.tools.setTool('rect');
+    const e = { pointerId: 1, shiftKey: false };
+    t.tools.pointerDown({ x: 0, y: 0 }, e);
+    t.tools.pointerMove({ x: 50, y: 50 }, e);
+    const created = t.batches.length;
+    t.tools.setReadOnly(true);
+    t.tools.pointerMove({ x: 90, y: 90 }, e);
+    t.tools.pointerUp({ x: 90, y: 90 }, e);
+    expect(t.batches.length).toBe(created); // no further updates after the switch
+    expect(t.tools.tool).toBe('select');
+
+    t.tools.setReadOnly(false);
+    const id = drawRect(t, { x: 200, y: 0 }, { x: 260, y: 60 });
+    expect(t.store.get(id)).toBeDefined();
+  });
+});

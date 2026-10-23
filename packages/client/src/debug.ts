@@ -20,6 +20,8 @@ export interface DebugHandle {
   snapshot(): BoardSnapshot;
   selection(): string[];
   tool(): string;
+  /** True while the UI is in viewer (read-only) mode. */
+  readOnly(): boolean;
   camera(): { x: number; y: number; zoom: number };
   toScreen(x: number, y: number): Point;
   toWorld(x: number, y: number): Point;
@@ -55,6 +57,7 @@ export function installDebugHandle(parts: {
     snapshot: () => copy(store.snapshot()),
     selection: () => [...selection.list()],
     tool: () => tools.tool,
+    readOnly: () => tools.readOnly,
     camera: () => ({ x: camera.x, y: camera.y, zoom: camera.zoom }),
     toScreen: (x: number, y: number) => camera.toScreen(x, y),
     toWorld: (x: number, y: number) => camera.toWorld(x, y),
