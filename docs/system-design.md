@@ -180,7 +180,7 @@ interface Tool {
 - Connects to `wss://…/ws?board=<id>` (cookie carries the JWT).
 - Sends `hello { lastSeq }`, receives the initial snapshot or catch-up ops.
 - Keeps the pending queue; batches outgoing ops every 50 ms; removes them on `ack`.
-- Reconnects with exponential backoff (0.5 s, 1 s, 2 s… max 10 s), then resends pending ops.
+- Reconnects with exponential backoff (0.5 s, 1 s, 2 s… max 10 s), then resends pending ops (built in milestone 5; `lastSeq` catch-up instead of a full snapshot comes in milestone 7). It does not reconnect after the close codes below.
 - Sends presence (cursor, selection) at most 20 times a second, separately from ops.
 
 **Presence** keeps remote cursors with a target position and a drawn position, lerping each frame, and drops users the server reports as gone.
@@ -211,6 +211,7 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 | `reject` | `opId, reason, shape` | Op refused; `shape` is the server's stored registers for that shape (values *with* their stamps, in snapshot form) or `null` if the server has no such shape. See "Rollback" below |
 | `peer-join` / `peer-leave` | `user` | Online list changes |
 | `cursor` / `select` | `userId, …` | Other users' presence |
+| `role` | `role` | Your role on this board changed (owner changed it over REST). Applies to your next batch; no reconnect |
 | `error` | `code, message` | e.g. `forbidden`, `board_not_found`; socket then closes |
 
 **Op shape** (defined in `shared/types.ts`):
@@ -223,6 +224,8 @@ type Op =
 // delete = update { deleted: true }
 // append: `chunk` is the author's per-stroke chunk number (0, 1, 2...); see algorithms.md §7a
 ```
+
+**Close codes.** After a socket has been accepted, the server closes it with: `1008` for a protocol violation (malformed message, ops before `hello`), `4003` when the user was removed from the board, `4004` when the board was deleted. The client never reconnects after these; any other close (network drop, server restart, `1012` service restart) is retried with backoff. Authentication failures happen earlier, as HTTP 401/403 on the upgrade, so no socket exists to close.
 
 **Rollback.** The rejected op was applied optimistically with a fresh stamp, newer than anything the server holds, so merging the server's values with LWW would keep the bad value. The client instead overwrites that one shape with the server's registers (or removes it if `shape` is `null`). It then re-applies its other still-unacked ops for the same shape, because the server's copy predates them (they may have been sent later in the same batch). If one of those is rejected too, its own reject rolls it back in turn.
 
@@ -265,7 +268,8 @@ Waiting for the commit before acking (step 6 → 7) is what makes "no acknowledg
 
 - Triggered every 500 ops or 60 s of activity per board, and when a room unloads.
 - Takes a Redis lock `snap-lock:{boardId}` (`SET NX EX 30`) so only one server snapshots a board at a time.
-- Writes `board_snapshots(board_id, seq, state)`, garbage-collects tombstones older than 24 h, and deletes ops older than the previous snapshot to cap table growth.
+- Writes `board_snapshots(board_id, seq, state)` and deletes ops older than the previous snapshot to cap table growth.
+- Tombstone GC (milestone 7): drops tombstones older than 24 h. A tombstone's age is the server's commit time of the op that set `deleted: true` (`board_ops.created_at`), so `shared` never needs wall-clock time.
 
 **Presence** never touches Postgres. Cursor and select messages are broadcast locally and published on a separate channel `presence:{boardId}`. The online list lives in a Redis hash `online:{boardId}` (userId → lastSeen) so all servers see the same list; a sweep every 5 s removes entries older than 15 s.
 
@@ -446,9 +450,9 @@ Milestones are built in this order; each ends with something that runs. The chec
 2. **Canvas basics:** renderer with render loop, dirty flags, devicePixelRatio; camera with pan, zoom-to-cursor, `toWorld`/`toScreen`; draw rectangles, ellipses and arrows from a local BoardStore.
 3. **Tools and interaction:** quadtree, viewport culling, hit testing; select tool (click, box-select, drag, resize, delete); shape tools, color picker, bring to front / send to back.
 4. **Server and sync:** Fastify + `ws`, Room, RoomManager (in memory, single server); protocol schemas; `hello`/`welcome`, `ops`, `ack`, broadcast; SyncClient with pending queue; two tabs editing one board.
-5. **Persistence and auth:** Postgres schema, migrations, OpWriter, ack after commit; Snapshotter and load from snapshot + ops; signup/login, boards list, JWT on the WebSocket upgrade, roles.
+5. **Persistence and auth:** Postgres schema, migrations, OpWriter, ack after commit; Snapshotter and load from snapshot + ops; signup/login, boards list, JWT on the WebSocket upgrade, roles; reconnect with backoff and resend of pending ops (pulled forward from milestone 7: without it an unacked edit is lost when the server restarts).
 6. **Freehand and presence:** pen tool with chunked appends, RDP, Bézier smoothing; eraser; live cursors with interpolation, selections, online list, heartbeats.
-7. **Undo, notes, reconnect:** per-user undo/redo with inverse ops; sticky notes with textarea overlay; reconnect with backoff, `lastSeq` catch-up, resend pending ops.
+7. **Undo, notes, catch-up:** per-user undo/redo with inverse ops; sticky notes with textarea overlay; `lastSeq` catch-up on reconnect; tombstone GC at snapshot time (age from `board_ops.created_at` of the delete op).
 8. **Scale out and harden:** Redis pub/sub between 2 server processes, `INCR` seq, gap detection; sharing dialog and link tokens; rate limits; origin check; graceful shutdown.
 9. **Tests and numbers:** Playwright 3-browser test, chaos test, load test at 10/20/30/50 bots; fix what the tests find.
 10. **Ship:** deploy to free tiers; README with architecture diagram, algorithm list and measured results; 60-second demo video.

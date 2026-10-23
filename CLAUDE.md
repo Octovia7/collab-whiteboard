@@ -95,6 +95,10 @@ Decisions (also in the docs):
 - The sticky-note shape type is `'note'` (its content is the `text` property).
 - Stroke points are relative to the stroke's `x, y` (its pen-down point). Its bounding box is computed from the
   points, never stored; `w`/`h` are unused. Strokes can't be resized in v1: move, recolor, delete only (algorithms.md §7a).
+- Viewers get a read-only UI (no selection or handles, drawing tools/colors/actions and edit shortcuts disabled, pan and
+  zoom work, "View only" badge), switched live by `{t:'role'}`. The server still rejects any viewer op.
+- Tombstone GC (milestone 7): a tombstone's age is the server's commit time of the op that set `deleted: true`
+  (`board_ops.created_at`); `shared` stays free of wall-clock time.
 
 Workflow: one branch per milestone (`milestone-N-name`). I don't check milestones manually: verify each one yourself in a
 real browser (Playwright E2E, plus looking at screenshots), and treat typecheck + lint + unit + convergence +
@@ -133,4 +137,3 @@ Numbers for the README (E2E test 5, dev build, bcrypt cost 4 for tests): board w
 77–176 ms on the server (snapshot seq 2000 + 100-op tail); browser open-to-rendered 0.9–2.6 s (includes Vite dev page load).
 Deferred: tombstone GC (needs deletion wall-clock times; tied to milestone 7's too-far-behind snapshot logic), lastSeq
 catch-up (M7), Redis snapshot lock + INCR seq (M8), share links + login rate limit (M8), OpWriter "Saving paused" breaker.
-Known nit: viewers can select shapes and see resize handles; their edits are rejected and rolled back.

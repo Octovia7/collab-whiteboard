@@ -82,6 +82,9 @@ export function App({ board: summary, user, onLogout }: Props) {
 
     // ?demo=N seeds only an empty board, after the server's snapshot has arrived, so a second
     // tab on the same board doesn't add another copy.
+    // Viewers get a read-only UI, switched live when the owner changes their role.
+    const offRole = sync.events.on('role', (role) => tools.setReadOnly(role === 'viewer'));
+
     const demo = demoCountFromUrl();
     const offWelcome = sync.events.on('welcome', () => {
       if (demo > 0 && store.size === 0) seedDemo(store, demo);
@@ -93,6 +96,7 @@ export function App({ board: summary, user, onLogout }: Props) {
     return () => {
       uninstallDebug();
       sync.stop();
+      offRole();
       offWelcome();
       offPrune();
       offSelection();

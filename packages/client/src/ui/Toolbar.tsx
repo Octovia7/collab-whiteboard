@@ -26,6 +26,7 @@ export function Toolbar({ tools, selection }: Props) {
   const tool = useSyncExternalStore(onTools, () => tools.tool);
   const color = useSyncExternalStore(onTools, () => tools.color);
   const selected = useSyncExternalStore(onSelection, () => selection.size);
+  const readOnly = useSyncExternalStore(onTools, () => tools.readOnly);
 
   return (
     <div className="toolbar" role="toolbar" aria-label="Tools">
@@ -34,6 +35,7 @@ export function Toolbar({ tools, selection }: Props) {
           key={t.name}
           type="button"
           className={t.name === tool ? 'active' : undefined}
+          disabled={readOnly && t.name !== 'select'}
           aria-pressed={t.name === tool}
           title={`${t.label} (${t.key})`}
           onClick={() => tools.setTool(t.name)}
@@ -47,6 +49,7 @@ export function Toolbar({ tools, selection }: Props) {
           key={c}
           type="button"
           className={`swatch${c === color ? ' active' : ''}`}
+          disabled={readOnly}
           style={{ background: c }}
           aria-label={`Color ${c}`}
           aria-pressed={c === color}
@@ -54,13 +57,13 @@ export function Toolbar({ tools, selection }: Props) {
         />
       ))}
       <span className="divider" />
-      <button type="button" disabled={selected === 0} title="Bring to front (])" onClick={() => tools.bringToFront()}>
+      <button type="button" disabled={readOnly || selected === 0} title="Bring to front (])" onClick={() => tools.bringToFront()}>
         Front
       </button>
-      <button type="button" disabled={selected === 0} title="Send to back ([)" onClick={() => tools.sendToBack()}>
+      <button type="button" disabled={readOnly || selected === 0} title="Send to back ([)" onClick={() => tools.sendToBack()}>
         Back
       </button>
-      <button type="button" disabled={selected === 0} title="Delete (Del)" onClick={() => tools.deleteSelection()}>
+      <button type="button" disabled={readOnly || selected === 0} title="Delete (Del)" onClick={() => tools.deleteSelection()}>
         Delete
       </button>
     </div>

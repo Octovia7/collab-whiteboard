@@ -31,6 +31,8 @@ export class ToolController {
   readonly events = new Emitter<{ change: undefined }>();
   private tools: Record<ToolName, Tool>;
   private current: ToolName = 'select';
+  /** Viewers: no selection, no drawing, no edit shortcuts. Pan and zoom live elsewhere and still work. */
+  private readOnlyMode = false;
   private currentColor: string = COLORS[0];
   private readonly ctx: ToolContext;
 
@@ -68,7 +70,29 @@ export class ToolController {
     return this.tools[this.current].cursor;
   }
 
+  get readOnly(): boolean {
+    return this.readOnlyMode;
+  }
+
+  /**
+   * Switches read-only mode live (on welcome and whenever the role changes). Entering it
+   * abandons any gesture in progress, clears the selection and returns to the select tool,
+   * so no edit can start; the server would reject a viewer's ops anyway.
+   */
+  setReadOnly(on: boolean): void {
+    if (on === this.readOnlyMode) return;
+    this.readOnlyMode = on;
+    if (on) {
+      this.tools[this.current].cancel();
+      this.current = 'select';
+      this.selection.clear();
+    }
+    this.events.emit('change', undefined);
+    this.ctx.redrawOverlay();
+  }
+
   setTool(name: ToolName): void {
+    if (this.readOnlyMode && name !== 'select') return;
     if (name === this.current) return;
     this.tools[this.current].cancel();
     this.current = name;
@@ -77,20 +101,24 @@ export class ToolController {
 
   /** Sets the color for new shapes and recolors the selection, as one batch. */
   setColor(color: string): void {
+    if (this.readOnlyMode) return;
     this.currentColor = color;
     this.submitForSelection((id) => this.store.makeUpdate(id, { color }));
     this.events.emit('change', undefined);
   }
 
   pointerDown(p: Point, e: ToolPointer): void {
+    if (this.readOnlyMode) return;
     this.tools[this.current].onPointerDown(p, e);
   }
 
   pointerMove(p: Point, e: ToolPointer): void {
+    if (this.readOnlyMode) return;
     this.tools[this.current].onPointerMove(p, e);
   }
 
   pointerUp(p: Point, e: ToolPointer): void {
+    if (this.readOnlyMode) return;
     this.tools[this.current].onPointerUp(p, e);
   }
 
@@ -100,7 +128,7 @@ export class ToolController {
 
   /** Returns true if the key was handled (the caller then prevents the browser default). */
   keyDown(e: KeyInput): boolean {
-    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (e.ctrlKey || e.metaKey || e.altKey || this.readOnlyMode) return false;
     switch (e.key) {
       case 'Delete':
       case 'Backspace':
@@ -128,18 +156,21 @@ export class ToolController {
 
   /** Delete = update { deleted: true }: the shapes become tombstones. */
   deleteSelection(): void {
+    if (this.readOnlyMode) return;
     this.submitForSelection((id) => this.store.makeUpdate(id, { deleted: true }));
     this.selection.clear();
   }
 
   /** One z update per moved shape, keeping the selection's own stacking order. */
   bringToFront(): void {
+    if (this.readOnlyMode) return;
     const ids = this.visibleSelection();
     const keys = keysAbove(this.store.topZ(), ids.length);
     this.store.submit(ids.map((id, i) => this.store.makeUpdate(id, { z: keys[i] as string })));
   }
 
   sendToBack(): void {
+    if (this.readOnlyMode) return;
     const ids = this.visibleSelection();
     const keys = keysBelow(this.store.bottomZ(), ids.length);
     this.store.submit(ids.map((id, i) => this.store.makeUpdate(id, { z: keys[i] as string })));

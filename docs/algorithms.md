@@ -208,7 +208,7 @@ const isVisible = (s: StoredShape) => s.deleted?.value !== true;  // renderer fi
 
 **Garbage collection (GC).** You can permanently remove a tombstone once no client could still send an op for it. Two practical rules:
 
-1. **Time-based (simplest):** remove tombstones older than 24 hours when taking a snapshot. Any client offline for longer than that reloads the board from scratch instead of replaying its queue.
+1. **Time-based (simplest):** remove tombstones older than 24 hours when taking a snapshot. Any client offline for longer than that reloads the board from scratch instead of replaying its queue. The age comes from the server, not from the board: it is the commit time (`board_ops.created_at`) of the op that set `deleted: true`. Lamport stamps say nothing about wall-clock time, and `shared` stays free of clocks, so the server looks the time up when it snapshots. (Built in milestone 7, together with the "too far behind" snapshot logic it depends on.)
 2. **Acknowledgement-based (exact):** the server tracks the highest stamp each connected client has confirmed receiving. A tombstone older than the *lowest* of those can go, because every client has already seen it.
 
 Start with rule 1; mention rule 2 in interviews.
@@ -333,7 +333,7 @@ socket.onmessage = (e) => {
 
 **Rejects and rollback.** The server can refuse an op: a viewer tried to edit, or the op is malformed. It replies with a reject and the server's current registers for the shape (values with their stamps, or `null` if it has none). The client overwrites its local copy with them; this deliberately bypasses LWW, because the rejected op carries a newer stamp than the server's values and would otherwise win. It then re-applies its other still-unacked ops for that shape, since the server's copy predates them, exactly as it does after loading a snapshot.
 
-**Reconnects.** When the socket drops, keep the pending queue. On reconnect, resend everything still in it. Duplicates are safe because applying the same op twice changes nothing (idempotency, section 3).
+**Reconnects.** When the socket drops, keep the pending queue. On reconnect (backoff 0.5 s, 1 s, 2 s… up to 10 s), resend everything still in it. Duplicates are safe because applying the same op twice changes nothing (idempotency, section 3), and the server skips an op id it has already stored. The client does not reconnect after the server closes with 4003 (removed from the board) or 4004 (board deleted).
 
 **Server-authoritative vs peer-to-peer.** Clients could send ops directly to each other (WebRTC), but a server makes permissions, persistence and history simple. Use a server; mention that the LWW design would also work peer-to-peer.
 
