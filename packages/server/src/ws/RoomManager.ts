@@ -16,6 +16,10 @@ export interface RoomManagerDeps {
   unloadAfterMs: number;
   ackDelayMs?: number;
   metrics?: Metrics;
+  /** Drop peers silent for this long (no ops, presence or heartbeat)... */
+  presenceTimeoutMs?: number;
+  /** ...checking this often. */
+  presenceSweepMs?: number;
 }
 
 /**
@@ -30,8 +34,22 @@ export class RoomManager {
   private readonly unloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private readonly observer: RoomObserver | undefined;
+  private readonly sweepTimer: ReturnType<typeof setInterval>;
 
   constructor(private readonly deps: RoomManagerDeps) {
+    const timeout = deps.presenceTimeoutMs ?? 15_000;
+    // Heartbeat sweep (algorithms.md §8): a closed laptop lid sends no goodbye, so peers we
+    // haven't heard from are dropped, and everyone else gets `peer-leave`.
+    this.sweepTimer = setInterval(() => {
+      const cutoff = performance.now() - timeout;
+      let dropped = 0;
+      for (const room of this.rooms.values()) dropped += room.sweep(cutoff);
+      if (dropped > 0) {
+        deps.metrics?.heartbeatTimeouts.inc(dropped);
+        deps.log.info({ dropped }, 'dropped silent peers');
+      }
+    }, deps.presenceSweepMs ?? 5_000);
+    this.sweepTimer.unref(); // never keeps the process alive on its own
     const m = deps.metrics;
     this.observer = m && {
       relayed: (ms) => m.opRelayMs.observe(ms),
@@ -83,6 +101,7 @@ export class RoomManager {
 
   /** Graceful shutdown: snapshot every loaded room. */
   async closeAll(): Promise<void> {
+    clearInterval(this.sweepTimer);
     for (const timer of this.unloadTimers.values()) clearTimeout(timer);
     this.unloadTimers.clear();
     await Promise.all([...this.rooms.values()].map((room) => this.unload(room)));

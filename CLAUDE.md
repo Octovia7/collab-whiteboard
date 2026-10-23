@@ -81,9 +81,8 @@ This is a production system, not a demo. These standards are part of each milest
 | --- | --- |
 | No `lastSeq` catch-up: every (re)connect gets a full snapshot; `catchup_ops` metric not emitted yet | M7 |
 | Tombstones are never garbage-collected (age = `board_ops.created_at` of the delete op) | M7 |
-| Pen tool, eraser, presence (cursors, selections, online list, heartbeats); WS idle sockets rely on nginx's 1 h read timeout until heartbeats | M6 |
 | Undo/redo, sticky notes | M7 |
-| Rate limits, socket caps and the snapshot lock are per server process (in memory); seq is assigned in memory | M8 (Redis: `rl:ws:*`, `INCR seq`, `snap-lock`) |
+| Rate limits, socket caps, the snapshot lock and presence (online list, cursors) are per server process (in memory); seq is assigned in memory | M8 (Redis: `rl:ws:*`, `INCR seq`, `snap-lock`, `presence:*` pub/sub, `online:*` hash) |
 | Single server only: no pub/sub between servers, no gap detection | M8 |
 | No share links; members are added by email only | M8 |
 | OpWriter has no "Saving paused" circuit breaker after 30 s of Postgres failures (it retries forever, without acking) | M8 |
@@ -133,7 +132,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Quadtree, hit testing, select & shape tools
 - [x] Server rooms + WebSocket sync (pending queue, acks, broadcast)
 - [x] Postgres persistence, snapshots, auth, roles
-- [ ] Pen tool (streaming, RDP, smoothing), eraser, presence
+- [x] Pen tool (streaming, RDP, smoothing), eraser, presence
 - [ ] Undo/redo, sticky notes, reconnect + catch-up
 - [ ] Redis pub/sub multi-server, sharing, rate limits
 - [ ] E2E, chaos and load tests
@@ -195,3 +194,12 @@ Production hardening pass (branch `hardening`, merged): everything in "Productio
 production stack on this machine: images build (client 74 MB, server ~250 MB), stack healthy, smoke test passes (sign up,
 draw, reload, shape persists, strict CSP, Secure/httpOnly cookie, /metrics and /readyz not public), production logs have
 no warnings and no secrets. A cold server container is healthy in ~22 s (bundle minified to 1.4 MB).
+
+Milestone 6 done and merged: pen tool (create + append chunk 0 in one batch, 50 ms chunks, unsent tail drawn on the
+overlay, pen-up `points` = iterative RDP with epsilon 1 screen px), midpoint quadratic Bezier smoothing at draw time,
+whole-stroke eraser (8 px, swept between pointer events), strokes selectable/movable/recolorable (no handles). Presence:
+`cursor`/`select`/`ping` from clients, `peer-join`/`peer-leave`/`cursor`/`select` from the server with a per-connection
+`peerId` (same user in two tabs = two cursors; online list groups by user); cursors throttled to 20/s with a trailing
+send, eased 30%/frame, colored by a hash of the user id, hidden after 30 s idle; heartbeat every 5 s, peers silent for
+15 s are terminated (PRESENCE_TIMEOUT_MS / PRESENCE_SWEEP_MS). Toolbar is left-anchored; header (title, online list,
+user) top right. Shortcuts P (pen), E (eraser).

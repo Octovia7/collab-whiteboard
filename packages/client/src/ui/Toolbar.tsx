@@ -9,6 +9,8 @@ const TOOLS: { name: ToolName; label: string; key: string }[] = [
   { name: 'rect', label: 'Rectangle', key: 'R' },
   { name: 'ellipse', label: 'Ellipse', key: 'O' },
   { name: 'arrow', label: 'Arrow', key: 'A' },
+  { name: 'pen', label: 'Pen', key: 'P' },
+  { name: 'eraser', label: 'Eraser', key: 'E' },
 ];
 
 interface Props {

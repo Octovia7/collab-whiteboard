@@ -12,6 +12,7 @@ import {
   shapeBounds,
 } from '@whiteboard/shared';
 import type {
+  AppendOp,
   BoardSnapshot,
   Box,
   CreateOp,
@@ -133,6 +134,14 @@ export class BoardStore {
     return { kind: 'create', opId: this.newOpId(), stamp: this.clock.tick(), shape };
   }
 
+  /**
+   * Builds (and stamps) an append of stroke points. `points` are relative to the stroke's x/y;
+   * `chunk` is the author's per-stroke chunk number (0, 1, 2...). Pass it to `submit`.
+   */
+  makeAppend(id: ShapeId, chunk: number, points: number[]): AppendOp {
+    return { kind: 'append', opId: this.newOpId(), stamp: this.clock.tick(), id, chunk, points };
+  }
+
   /** Builds (and stamps) an update. Pass it to `submit`. */
   makeUpdate(id: ShapeId, props: Partial<ShapeProps>): UpdateOp {
     return { kind: 'update', opId: this.newOpId(), stamp: this.clock.tick(), id, props };
@@ -158,6 +167,22 @@ export class BoardStore {
     const shape = this.board.get(id);
     if (!shape) return undefined;
     return shapeBounds(shape, shape.type === 'stroke' ? this.board.strokePoints(id) : undefined);
+  }
+
+  /**
+   * Points to draw for a stroke, relative to its x/y: the pen-up `points` once set, otherwise
+   * the streamed chunks in chunk order (algorithms.md §7a).
+   */
+  strokePoints(id: ShapeId): number[] {
+    return this.board.strokePoints(id) ?? [];
+  }
+
+  /** Visible strokes whose line passes within `tolerance` of `p` (the eraser). */
+  strokesNear(p: Point, tolerance: number): ShapeId[] {
+    return this.tree.query(expandBox(boxFromPoints(p, p), tolerance)).filter((id) => {
+      const shape = this.board.get(id);
+      return shape?.type === 'stroke' && hitShape(shape, p, tolerance, this.board.strokePoints(id));
+    });
   }
 
   /** Visible shapes overlapping `box`, in draw order (bottom first). */

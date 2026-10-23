@@ -1,6 +1,7 @@
 import type { BoardSnapshot, Point, Shape } from '@whiteboard/shared';
 import type { Camera } from './canvas/Camera';
 import type { BoardStore } from './store/BoardStore';
+import type { Presence } from './store/Presence';
 import type { Selection } from './store/Selection';
 import type { ConnectionStatus, SyncClient } from './sync/SyncClient';
 import type { ToolController } from './tools/ToolController';
@@ -30,6 +31,12 @@ export interface DebugHandle {
   role(): string | null;
   /** Local ops not yet acked by the server. */
   unacked(): number;
+  /** A stroke's drawn points (relative to its x/y): pen-up points, or the streamed chunks. */
+  strokePoints(id: string): number[];
+  /** Other connections on this board, with their latest cursor target and selection. */
+  peers(): { peerId: string; userId: string; name: string; color: string; target: { x: number; y: number } | null; selection: string[] }[];
+  /** People online, me first. */
+  online(): { name: string; isYou: boolean; color: string }[];
 }
 
 declare global {
@@ -45,11 +52,12 @@ export function installDebugHandle(parts: {
   boardId: string;
   store: BoardStore;
   sync: SyncClient;
+  presence: Presence;
   camera: Camera;
   selection: Selection;
   tools: ToolController;
 }): () => void {
-  const { boardId, store, sync, camera, selection, tools } = parts;
+  const { boardId, store, sync, presence, camera, selection, tools } = parts;
   window.__board = Object.freeze({
     boardId,
     clientId: store.clientId,
@@ -64,6 +72,17 @@ export function installDebugHandle(parts: {
     status: () => sync.status,
     role: () => sync.role,
     unacked: () => sync.unackedCount,
+    strokePoints: (id: string) => [...store.strokePoints(id)],
+    peers: () =>
+      presence.list().map((p) => ({
+        peerId: p.peerId,
+        userId: p.userId,
+        name: p.name,
+        color: p.color,
+        target: p.target ? { ...p.target } : null,
+        selection: [...p.selection],
+      })),
+    online: () => presence.online().map((u) => ({ name: u.name, isYou: u.isYou, color: u.color })),
   });
   return () => {
     delete window.__board;

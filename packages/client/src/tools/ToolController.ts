@@ -7,13 +7,15 @@ import type { Selection } from '../store/Selection';
 import { HANDLE_PX, SELECTION_COLOR } from './constants';
 import { handlesFor } from './handles';
 import { keysAbove, keysBelow } from './reorder';
+import { EraserTool } from './EraserTool';
+import { PenTool } from './PenTool';
 import { SelectTool } from './SelectTool';
 import { ShapeTool } from './ShapeTool';
 import type { Tool, ToolContext, ToolName, ToolPointer } from './Tool';
 
 export const COLORS = ['#1e1e1e', '#e03131', '#2f9e44', '#1971c2', '#f08c00', '#9c36b5'] as const;
 
-const SHORTCUTS: Record<string, ToolName> = { v: 'select', r: 'rect', o: 'ellipse', a: 'arrow' };
+const SHORTCUTS: Record<string, ToolName> = { v: 'select', r: 'rect', o: 'ellipse', a: 'arrow', p: 'pen', e: 'eraser' };
 
 export interface KeyInput {
   key: string;
@@ -41,6 +43,7 @@ export class ToolController {
     private readonly selection: Selection,
     private readonly camera: Camera,
     redrawOverlay: () => void,
+    now: () => number = () => performance.now(),
   ) {
     this.ctx = {
       store,
@@ -49,12 +52,15 @@ export class ToolController {
       color: () => this.currentColor,
       setTool: (name) => this.setTool(name),
       redrawOverlay,
+      now,
     };
     this.tools = {
       select: new SelectTool(this.ctx),
       rect: new ShapeTool('rect', this.ctx),
       ellipse: new ShapeTool('ellipse', this.ctx),
       arrow: new ShapeTool('arrow', this.ctx),
+      pen: new PenTool(this.ctx),
+      eraser: new EraserTool(this.ctx),
     };
   }
 
@@ -120,6 +126,12 @@ export class ToolController {
   pointerUp(p: Point, e: ToolPointer): void {
     if (this.readOnlyMode) return;
     this.tools[this.current].onPointerUp(p, e);
+  }
+
+  /** Pointer moved with no button down (null: it left the board). */
+  pointerHover(p: Point | null): void {
+    if (this.readOnlyMode) return;
+    this.tools[this.current].onPointerHover?.(p);
   }
 
   cancelGesture(): void {

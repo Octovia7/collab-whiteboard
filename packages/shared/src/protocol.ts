@@ -14,6 +14,18 @@ export const LIMITS = {
   maxOpsPerBatch: 100,
   maxPointsPerAppend: 2000,
   maxTextLength: 10_000,
+  /** Shapes one presence `select` message may name. */
+  maxSelectedIds: 1000,
+} as const;
+
+/**
+ * Presence (algorithms.md §8): ephemeral, never persisted. Clients send their cursor at most
+ * 20 times a second and a heartbeat when otherwise idle; a peer not heard from for 15 s is dropped.
+ */
+export const PRESENCE = {
+  cursorIntervalMs: 50,
+  heartbeatMs: 5_000,
+  timeoutMs: 15_000,
 } as const;
 
 /** Coordinates beyond this are almost certainly bugs or abuse (and would inflate the quadtree). */
@@ -85,11 +97,18 @@ export const opSchema = z.discriminatedUnion('kind', [
 export type ClientMessage =
   | { t: 'hello'; boardId: string; lastSeq: number }
   | { t: 'ops'; ops: Op[] }
+  /** My pointer, in world coordinates. */
+  | { t: 'cursor'; x: number; y: number }
+  /** My current selection. */
+  | { t: 'select'; ids: string[] }
+  /** Heartbeat when nothing else was sent for a while. */
   | { t: 'ping' };
 
 export const clientMessageSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('hello'), boardId: boardIdSchema, lastSeq: z.number().int().min(0) }),
   z.object({ t: z.literal('ops'), ops: z.array(opSchema).min(1).max(LIMITS.maxOpsPerBatch) }),
+  z.object({ t: z.literal('cursor'), x: coord, y: coord }),
+  z.object({ t: z.literal('select'), ids: z.array(shapeId).max(LIMITS.maxSelectedIds) }),
   z.object({ t: z.literal('ping') }),
 ]);
 
@@ -97,12 +116,26 @@ export const clientMessageSchema = z.discriminatedUnion('t', [
 
 export type Role = 'owner' | 'editor' | 'viewer';
 
+/**
+ * Someone connected to the board. `peerId` identifies one connection (one tab): the same user
+ * in two tabs has two cursors. Online lists group by `userId`.
+ */
+export interface PeerInfo {
+  peerId: string;
+  userId: string;
+  name: string;
+}
+
 export type ServerMessage =
-  | { t: 'welcome'; you: { userId: string }; role: Role; peers: { userId: string }[]; snapshot: BoardSnapshot; seq: number }
+  | { t: 'welcome'; you: PeerInfo; role: Role; peers: PeerInfo[]; snapshot: BoardSnapshot; seq: number }
   | { t: 'ops'; ops: Op[]; seq: number }
   | { t: 'ack'; opIds: string[]; seq: number }
   /** `shape` is the server's current registers for rollback, or null if it has no such shape. */
   | { t: 'reject'; opId: string; reason: string; shape: SnapshotShape | null }
+  | { t: 'peer-join'; peer: PeerInfo }
+  | { t: 'peer-leave'; peerId: string }
+  | { t: 'cursor'; peerId: string; x: number; y: number }
+  | { t: 'select'; peerId: string; ids: string[] }
   /** Your role on this board changed; it applies to your next batch (no reconnect needed). */
   | { t: 'role'; role: Role }
   | { t: 'error'; code: string; message: string };
@@ -122,6 +155,9 @@ export const FINAL_CLOSE_CODES: readonly number[] = Object.values(CLOSE);
 /** Graceful server shutdown: reconnect right away (with a little jitter) instead of backing off. */
 export const SERVICE_RESTART = 1012;
 
+/** No message (not even a heartbeat) for PRESENCE.timeoutMs: probably a dead connection. Retried. */
+export const HEARTBEAT_TIMEOUT = 4000;
+
 // The server is trusted for board content, so snapshots get a structural check only:
 // deep-validating 10,000 shapes on every join would cost more than it protects.
 const snapshotSchema = z.custom<BoardSnapshot>(
@@ -134,10 +170,14 @@ const snapshotShapeSchema = z.custom<SnapshotShape>(
 );
 const seq = z.number().int().min(0);
 const role = z.enum(['owner', 'editor', 'viewer']);
-const user = z.object({ userId: z.string() });
+const peer = z.object({ peerId: z.string(), userId: z.string(), name: z.string().max(200) });
 
 export const serverMessageSchema = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('welcome'), you: user, role, peers: z.array(user), snapshot: snapshotSchema, seq }),
+  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), snapshot: snapshotSchema, seq }),
+  z.object({ t: z.literal('peer-join'), peer }),
+  z.object({ t: z.literal('peer-leave'), peerId: z.string() }),
+  z.object({ t: z.literal('cursor'), peerId: z.string(), x: coord, y: coord }),
+  z.object({ t: z.literal('select'), peerId: z.string(), ids: z.array(z.string()).max(LIMITS.maxSelectedIds) }),
   z.object({ t: z.literal('ops'), ops: z.array(opSchema), seq }),
   z.object({ t: z.literal('ack'), opIds: z.array(z.string()), seq }),
   z.object({ t: z.literal('reject'), opId: z.string(), reason: z.string(), shape: snapshotShapeSchema.nullable() }),

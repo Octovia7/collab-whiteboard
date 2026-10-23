@@ -98,6 +98,8 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     unloadAfterMs: config.roomUnloadMs,
     ackDelayMs: config.faults.ackDelayMs,
     metrics,
+    presenceTimeoutMs: config.presence.timeoutMs,
+    presenceSweepMs: config.presence.sweepMs,
   });
   const limits = new UserLimits(config.ws.opsPerSec, config.ws.opsBurst, config.ws.maxSocketsPerUser);
   let shuttingDown = false;
@@ -194,7 +196,9 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     }
     const role = await repo.getRole(board.data, userId);
     if (!role) return { ok: false, status: 403, text: 'Forbidden', reason: 'not_a_member' };
-    return { ok: true, boardId: board.data, userId, role };
+    const user = await repo.findUserById(userId);
+    if (!user) return { ok: false, status: 401, text: 'Unauthorized', reason: 'unknown_user' };
+    return { ok: true, boardId: board.data, userId, name: user.name, role };
   };
 
   app.server.on('upgrade', (req, socket, head) => {
@@ -208,13 +212,14 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
           log.info({ status: result.status, reason: result.reason }, 'upgrade refused');
           return refuse(socket, result.status, result.text);
         }
-        const { boardId, userId, role } = result;
+        const { boardId, userId, name, role } = result;
         if (!limits.open(userId)) {
           log.warn({ userId, boardId }, 'upgrade refused: too many sockets');
           return refuse(socket, 429, 'Too Many Requests');
         }
         wss.handleUpgrade(req, socket, head, (ws) =>
-          handleConnection(ws, { boardId, userId, role }, {
+          handleConnection(ws, { boardId, userId, name, role }, {
+            connId,
             rooms,
             log: log.child({ userId, boardId }),
             limits,
