@@ -28,6 +28,7 @@ pnpm test                     # all Vitest suites (convergence test with 50 seed
 pnpm test:convergence         # randomized convergence test, all 500 seeds (must always pass)
 CONVERGENCE_SEED=42 pnpm test:convergence   # replay one failing seed (CONVERGENCE_SEEDS=n changes the count)
 pnpm test:watch               # Vitest in watch mode
+pnpm test:e2e                 # Playwright (Chromium); starts its own server :3101 and client :5199
 pnpm -F server db:migrate     # run Drizzle migrations
 pnpm typecheck && pnpm lint
 ```
@@ -93,7 +94,10 @@ Decisions (also in the docs):
 - Stroke points are relative to the stroke's `x, y` (its pen-down point). Its bounding box is computed from the
   points, never stored; `w`/`h` are unused. Strokes can't be resized in v1: move, recolor, delete only (algorithms.md §7a).
 
-Workflow: one branch per milestone (`milestone-N-name`), merged to main only after I've checked it.
+Workflow: one branch per milestone (`milestone-N-name`). I don't check milestones manually: verify each one yourself in a
+real browser (Playwright E2E, plus looking at screenshots), and treat typecheck + lint + unit + convergence + E2E all
+passing as approval to merge into main and tick it off. E2E reads tab state only through `window.__board` (read-only,
+dev builds only) and acts only through real mouse/keyboard input.
 
 Milestone 2 done and merged: client package, Camera, Renderer (two layers, draw on demand, HiDPI), pan/zoom input,
 rect/ellipse/arrow drawing, demo shapes (`?demo=N`). Checked in the browser, including `?demo=20000`.
@@ -105,3 +109,12 @@ through `BoardStore.submit()` (emits `submit` for sync/undo later); remote ops t
 tolerance 6 px in screen pixels, divided by zoom. Drag sends one update per pointer move; merging same-shape updates
 every 50 ms is the sync outbox's job (milestone 4).
 - Z keys are integer part + fraction (algorithms.md §5): 4 chars after 20,000 top inserts (was 3,334); first key `i0`.
+
+Milestone 4 done and merged: `packages/server` (Fastify + raw `ws` on /ws, port 3001; Vite proxies /ws and /api), Room
+op pipeline (role check per batch -> validate -> seq -> apply -> broadcast -> `await opStore.append` -> ack), dedupe of
+resent ops by opId, Zod protocol in `shared/protocol.ts`, SyncClient (50 ms outbox with the drop-only merge rule, pending
+until ack, rollback to the server's registers then re-apply other unacked ops for that shape), connection badge.
+Board id from `?board=`. Verified by `tests/sync.test.ts` and Playwright E2E (2-3 tabs, concurrent drags, delete vs drag,
+late join, plus camera and tools for milestones 2-3).
+M4 scope limits (lifted in M5/M7): anonymous per-socket userId with editor role, in-memory OpStore, rooms never unloaded,
+no reconnect (badge says reload). `?demo=N` is off by default and seeds only an empty board after welcome.

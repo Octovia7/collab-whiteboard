@@ -4,6 +4,7 @@ import { Camera } from './canvas/Camera';
 import { PanZoomInput } from './canvas/PanZoomInput';
 import { Renderer } from './canvas/Renderer';
 import { ToolInput } from './canvas/ToolInput';
+import { installDebugHandle } from './debug';
 import { demoCountFromUrl, seedDemo } from './demo';
 import { BoardStore } from './store/BoardStore';
 import { Selection } from './store/Selection';
@@ -78,8 +79,11 @@ export function App() {
       if (demo > 0 && store.size === 0) seedDemo(store, demo);
     });
     sync.start();
+    // Dev/test builds only: the constant check lets the production bundle drop debug.ts.
+    const uninstallDebug = import.meta.env.DEV ? installDebugHandle(board) : () => {};
 
     return () => {
+      uninstallDebug();
       sync.stop();
       offWelcome();
       offPrune();
