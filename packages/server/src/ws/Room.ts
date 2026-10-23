@@ -1,17 +1,26 @@
 import { Board } from '@whiteboard/shared';
-import type { BoardSnapshot, Op, Role, ServerMessage, ShapeId } from '@whiteboard/shared';
+import type { BoardSnapshot, Op, PeerInfo, Role, ServerMessage, ShapeId } from '@whiteboard/shared';
 import type { SnapshotState } from '../db/schema';
 import type { OpStore, StoredOp } from '../persistence/OpStore';
 
 /** One connected socket, as the room sees it. */
 export interface Peer {
+  /** Identifies this connection (one tab); presence is per connection. */
+  readonly peerId: string;
   readonly userId: string;
+  readonly name: string;
+  /** performance.now() of the last message from this socket (heartbeat sweep). */
+  lastSeen: number;
   /** Mutable: a role change reaches open sockets on their next batch (setRole). */
   role: Role;
   /** Must be a no-op once the socket has closed. */
   send(msg: ServerMessage): void;
   close(code: number, reason: string): void;
+  /** Drops a socket that stopped answering (no close handshake: the other end may be gone). */
+  terminate(): void;
 }
+
+const info = (p: Peer): PeerInfo => ({ peerId: p.peerId, userId: p.userId, name: p.name });
 
 /** Timings and counts the room reports (metrics.ts). */
 export interface RoomObserver {
@@ -107,14 +116,40 @@ export class Room {
     return { board: this.board.snapshot(), creators: Object.fromEntries(this.creators) };
   }
 
-  /** Adds a peer and returns its welcome: the full board and the seq it covers. */
+  /**
+   * Adds a peer and returns its welcome: the full board, the seq it covers, and who else is
+   * here. Everyone else hears `peer-join`.
+   */
   join(peer: Peer): ServerMessage {
+    const others = [...this.peers].map(info);
+    for (const p of this.peers) p.send({ t: 'peer-join', peer: info(peer) });
     this.peers.add(peer);
-    return { t: 'welcome', you: { userId: peer.userId }, role: peer.role, peers: [], snapshot: this.board.snapshot(), seq: this.seq };
+    return { t: 'welcome', you: info(peer), role: peer.role, peers: others, snapshot: this.board.snapshot(), seq: this.seq };
   }
 
   leave(peer: Peer): void {
-    this.peers.delete(peer);
+    if (!this.peers.delete(peer)) return;
+    for (const p of this.peers) p.send({ t: 'peer-leave', peerId: peer.peerId });
+  }
+
+  /**
+   * Relays a cursor or selection to everyone else in the room. Presence is ephemeral: never
+   * applied to the board, never persisted, allowed for viewers too (CLAUDE.md rule 9).
+   */
+  relayPresence(from: Peer, msg: { t: 'cursor'; x: number; y: number } | { t: 'select'; ids: string[] }): void {
+    const out: ServerMessage = msg.t === 'cursor' ? { t: 'cursor', peerId: from.peerId, x: msg.x, y: msg.y } : { t: 'select', peerId: from.peerId, ids: msg.ids };
+    for (const p of this.peers) if (p !== from) p.send(out);
+  }
+
+  /** Terminates peers silent since before `cutoff`; their socket's close then announces `peer-leave`. */
+  sweep(cutoff: number): number {
+    let dropped = 0;
+    for (const p of this.peers) {
+      if (p.lastSeen >= cutoff) continue;
+      p.terminate();
+      dropped++;
+    }
+    return dropped;
   }
 
   /** A role change takes effect on the user's open sockets immediately: their next batch is checked against it. */
@@ -132,7 +167,7 @@ export class Room {
       if (userId !== null && peer.userId !== userId) continue;
       peer.send({ t: 'error', code: reason, message: reason.replace(/_/g, ' ') });
       peer.close(code, reason);
-      this.peers.delete(peer);
+      this.leave(peer);
     }
   }
 

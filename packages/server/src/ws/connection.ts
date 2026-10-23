@@ -13,10 +13,14 @@ import type { RoomManager } from './RoomManager';
 export interface SocketIdentity {
   boardId: string;
   userId: string;
+  /** Display name, shown next to this user's cursor and in online lists. */
+  name: string;
   role: Role;
 }
 
 export interface ConnectionDeps {
+  /** This connection's id: also its presence peerId. */
+  connId: string;
   rooms: RoomManager;
   /** Already bound to this connection's connId, userId and boardId. */
   log: FastifyBaseLogger;
@@ -43,12 +47,19 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
   const { boardId } = who;
   const { rooms, log, limits, metrics } = deps;
   const peer: Peer = {
+    peerId: deps.connId,
     userId: who.userId,
+    name: who.name,
     role: who.role,
+    lastSeen: performance.now(),
     send: (msg) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
     },
     close: (code, reason) => socket.close(code, reason),
+    terminate: () => {
+      log.info('no heartbeat: terminating');
+      socket.terminate();
+    },
   };
   const messages = new TokenBucket(deps.msgsPerSec, deps.msgsBurst);
   let room: Room | null = null;
@@ -90,6 +101,7 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
   };
 
   socket.on('message', (data: RawData, isBinary: boolean) => {
+    peer.lastSeen = performance.now(); // any message counts as a heartbeat
     if (messages.take(1) > 0) {
       metrics.wsRateLimitDisconnects.inc();
       return fail('rate_limited', 'too many messages');
@@ -120,8 +132,15 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
       case 'ops':
         if (!room) return fail('hello_first', 'send hello and wait for welcome before ops');
         return enqueueOps(room, msg.ops);
+      case 'cursor':
+      case 'select':
+        // Presence before the room is ready has nowhere to go; the next update will.
+        if (!room) return;
+        metrics.presenceMessages.inc({ type: msg.t });
+        room.relayPresence(peer, msg);
+        return;
       case 'ping':
-        return; // heartbeats and presence: milestone 6
+        return; // only refreshes lastSeen (above)
     }
   });
 

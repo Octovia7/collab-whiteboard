@@ -149,3 +149,54 @@ export function hitShape(shape: Geometry, p: Point, tolerance: number, strokePoi
     }
   }
 }
+
+/** Distance from point i of a flat [x1, y1, x2, y2, ...] array to the infinite line through points a and b. */
+function perpDistFlat(pts: readonly number[], i: number, a: number, b: number): number {
+  const px = pts[2 * i] as number;
+  const py = pts[2 * i + 1] as number;
+  const ax = pts[2 * a] as number;
+  const ay = pts[2 * a + 1] as number;
+  const dx = (pts[2 * b] as number) - ax;
+  const dy = (pts[2 * b + 1] as number) - ay;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return Math.hypot(px - ax, py - ay);
+  // |cross product| / base length = height of the triangle (a, b, p) = distance to the line.
+  return Math.abs(dy * (px - ax) - dx * (py - ay)) / len;
+}
+
+/**
+ * Ramer–Douglas–Peucker simplification (algorithms.md §7b) on a flat [x1, y1, x2, y2, ...]
+ * list: keep the two ends, find the point farthest from the line between them, and if it is
+ * further than `epsilon`, keep it and repeat on both halves; otherwise drop everything between.
+ *
+ * Iterative with an explicit stack rather than recursive, so a long stroke whose worst case
+ * peels off one point per split (O(n) depth) can't overflow the call stack. The result is
+ * always a subsequence of the input, with the first and last points kept.
+ */
+export function rdp(points: readonly number[], epsilon: number): number[] {
+  const n = Math.floor(points.length / 2);
+  if (n < 3) return points.slice(0, n * 2);
+  const keep = new Uint8Array(n);
+  keep[0] = 1;
+  keep[n - 1] = 1;
+  const stack: [number, number][] = [[0, n - 1]];
+  while (stack.length > 0) {
+    const [a, b] = stack.pop() as [number, number];
+    let maxD = 0;
+    let idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const d = perpDistFlat(points, i, a, b);
+      if (d > maxD) {
+        maxD = d;
+        idx = i;
+      }
+    }
+    if (idx !== -1 && maxD > epsilon) {
+      keep[idx] = 1;
+      stack.push([a, idx], [idx, b]);
+    }
+  }
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(points[2 * i] as number, points[2 * i + 1] as number);
+  return out;
+}
