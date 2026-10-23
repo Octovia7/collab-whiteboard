@@ -5,9 +5,9 @@ import { E2E_DB_URL, killServer, startServer } from './server';
 /** Fresh whiteboard_e2e database, then the server. Needs `docker compose up -d`. */
 export default async function globalSetup(): Promise<void> {
   await ensureDatabase('whiteboard_e2e');
-  const { db, pool } = connect(E2E_DB_URL);
+  const { pool } = connect(E2E_DB_URL);
   try {
-    await runMigrations(db);
+    await runMigrations(pool);
   } finally {
     await pool.end();
   }
