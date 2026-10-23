@@ -13,9 +13,18 @@ export interface Peer {
   close(code: number, reason: string): void;
 }
 
+/** Timings and counts the room reports (metrics.ts). */
+export interface RoomObserver {
+  relayed(ms: number): void;
+  committed(ms: number): void;
+  accepted(count: number): void;
+  rejected(reason: string): void;
+}
+
 export interface RoomOptions {
   /** Called after ops are accepted, so the Snapshotter can count them. */
   onAccepted?: (room: Room, count: number) => void;
+  observer?: RoomObserver;
   /** Fault injection (tests only): wait this long between commit and ack. */
   ackDelayMs?: number;
 }
@@ -129,8 +138,13 @@ export class Room {
 
   async handleOps(from: Peer, ops: Op[]): Promise<void> {
     // Checked on every batch, not just at connect: roles can change while a socket is open.
+    const started = performance.now();
+    const observer = this.options.observer;
     if (from.role === 'viewer') {
-      for (const op of ops) from.send({ t: 'reject', opId: op.opId, reason: 'forbidden', shape: this.currentShape(op) });
+      for (const op of ops) {
+        observer?.rejected('forbidden');
+        from.send({ t: 'reject', opId: op.opId, reason: 'forbidden', shape: this.currentShape(op) });
+      }
       return;
     }
 
@@ -151,6 +165,7 @@ export class Room {
       }
       const reason = this.validate(op, from.userId);
       if (reason) {
+        observer?.rejected(reason);
         from.send({ t: 'reject', opId: op.opId, reason, shape: this.currentShape(op) });
         continue;
       }
@@ -166,6 +181,8 @@ export class Room {
       const last = (fresh[fresh.length - 1] as { seq: number }).seq;
       const msg: ServerMessage = { t: 'ops', ops: fresh.map((f) => f.op), seq: last };
       for (const peer of this.peers) if (peer !== from) peer.send(msg);
+      observer?.relayed(performance.now() - started);
+      observer?.accepted(fresh.length);
 
       const committed = this.store.append(
         fresh.map(({ op, seq }) => ({ boardId: this.boardId, seq, opId: op.opId, userId: from.userId, op })),
@@ -180,6 +197,7 @@ export class Room {
     await Promise.all(waits);
     if (this.options.ackDelayMs) await sleep(this.options.ackDelayMs); // fault injection (tests only)
     from.send({ t: 'ack', opIds: ackIds, seq: ackSeq });
+    if (fresh.length > 0) observer?.committed(performance.now() - started);
   }
 
   /** Returns a reject reason, or null if the op may be applied. */

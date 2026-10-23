@@ -1,4 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify';
+import type { Metrics } from '../metrics';
 import type { Room } from '../ws/Room';
 import type { OpWriter } from './OpWriter';
 import type { Repo } from './repo';
@@ -23,6 +24,7 @@ export class Snapshotter {
     private readonly log: FastifyBaseLogger,
     private readonly everyOps: number,
     private readonly everyMs: number,
+    private readonly metrics?: Metrics,
   ) {}
 
   /** Called by the room after it accepts ops. */
@@ -52,14 +54,15 @@ export class Snapshotter {
       const state = room.persistentState();
       const covered = s.opsSince;
       await this.writer.drain();
-      await this.repo.writeSnapshot(room.boardId, seq, state, state.board.shapes.length);
       // Keep the ops between the previous snapshot and this one (useful for catch-up from a
-      // recent lastSeq); everything older is covered twice over and can go.
-      await this.repo.deleteOpsUpTo(room.boardId, s.previousSeq);
+      // recent lastSeq); everything older is covered twice over and can go. One transaction.
+      await this.repo.writeSnapshotAndPrune(room.boardId, seq, state, state.board.shapes.length, s.previousSeq);
       s.previousSeq = s.lastSeq;
       s.lastSeq = seq;
       s.opsSince = Math.max(0, s.opsSince - covered);
-      this.log.info({ boardId: room.boardId, seq, shapes: state.board.shapes.length, snapshot_ms: Math.round(performance.now() - started) }, 'snapshot written');
+      const ms = performance.now() - started;
+      this.metrics?.snapshotMs.observe(ms);
+      this.log.info({ boardId: room.boardId, seq, shapes: state.board.shapes.length, snapshot_ms: Math.round(ms) }, 'snapshot written');
     } catch (err) {
       this.log.error({ err, boardId: room.boardId }, 'snapshot failed; will retry on the next trigger');
     } finally {

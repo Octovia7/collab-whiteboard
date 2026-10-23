@@ -1,0 +1,79 @@
+# The full production stack: Postgres, Redis, the server and the nginx-served client.
+#   cp .env.prod.example .env.prod   # then fill in real secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# Only the client's port is published; Postgres, Redis and the server stay on the internal network.
+name: whiteboard-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: whiteboard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: whiteboard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U whiteboard"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://whiteboard:${POSTGRES_PASSWORD}@postgres:5432/whiteboard
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.prod}
+      ALLOWED_ORIGINS: ${APP_ORIGIN:?set APP_ORIGIN in .env.prod}
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    # Time for graceful shutdown (flush, snapshot, close sockets with 1012) before SIGKILL.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  client:
+    build:
+      context: .
+      dockerfile: packages/client/Dockerfile
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      server:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

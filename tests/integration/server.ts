@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net';
+import type { Writable } from 'node:stream';
 import { WebSocket as NodeWebSocket } from 'ws';
 import { buildApp } from '../../packages/server/src/app';
 import type { App } from '../../packages/server/src/app';
@@ -17,16 +18,17 @@ export interface TestServer extends App {
 }
 
 /** A real server on a random port (or a given one, to "restart" on the same address). */
-export async function startServer(env: Record<string, string> = {}, port = 0): Promise<TestServer> {
+export async function startServer(env: Record<string, string> = {}, port = 0, options: { logStream?: Writable } = {}): Promise<TestServer> {
   const config = loadConfig({
     NODE_ENV: 'test',
     DATABASE_URL: DB_URL,
-    LOG: 'off',
+    LOG_LEVEL: 'silent',
     BCRYPT_COST: '4', // fast hashing in tests; production uses 12
+    AUTH_RATE_LIMIT_PER_MIN: '1000', // tests sign up many users from one IP; the limit has its own test
     ALLOWED_ORIGINS: ORIGIN,
     ...env,
   });
-  const built = await buildApp(config);
+  const built = await buildApp(config, options);
   await built.app.listen({ port, host: '127.0.0.1' });
   const actual = (built.app.server.address() as AddressInfo).port;
   return { ...built, port: actual, base: `http://127.0.0.1:${actual}`, close: () => built.app.close() };

@@ -46,7 +46,11 @@ export function registerAuthRoutes(app: FastifyInstance, repo: Repo, config: Con
     });
   };
 
-  app.post('/api/auth/signup', async (req, reply) => {
+  // Per client IP (X-Forwarded-For when behind the proxy): slows down password guessing
+  // and mass sign-ups. Redis-backed across servers in milestone 8.
+  const authLimit = { config: { rateLimit: { max: config.authRateLimitPerMin, timeWindow: '1 minute' } } };
+
+  app.post('/api/auth/signup', authLimit, async (req, reply) => {
     const body = signupBody.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: 'invalid_input', details: body.error.issues[0]?.message });
     const hash = await bcrypt.hash(body.data.password, config.bcryptCost);
@@ -56,7 +60,7 @@ export function registerAuthRoutes(app: FastifyInstance, repo: Repo, config: Con
     return reply.code(201).send({ user });
   });
 
-  app.post('/api/auth/login', async (req, reply) => {
+  app.post('/api/auth/login', authLimit, async (req, reply) => {
     const body = credentials.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: 'invalid_input' });
     const user = await repo.findUserByEmail(body.data.email);

@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json && pnpm -r typecheck",
     "lint": "eslint .",
     "test:e2e": "playwright test",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:smoke": "playwright test --config playwright.smoke.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

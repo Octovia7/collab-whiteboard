@@ -32,10 +32,63 @@ pnpm test:integration         # Vitest against Docker Postgres (db whiteboard_te
 pnpm test:e2e                 # Playwright (Chromium); db whiteboard_e2e, server :3101 (tests may kill/restart it), client :5199
 pnpm -F server db:migrate     # run Drizzle migrations (the server also runs them on start)
 pnpm -F server db:generate    # new migration from src/db/schema.ts (never connects to a DB)
+pnpm -F server build          # production bundle (esbuild) -> packages/server/dist
 pnpm typecheck && pnpm lint
+
+# Production stack (cp .env.prod.example .env.prod and fill in secrets first; .env.prod is never committed)
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --wait   # app on :8080
+pnpm test:smoke               # Playwright smoke test against the running production stack
 ```
 
 Keep these scripts working; add new ones to this list when you create them.
+
+## Production standards (apply to everything, in every milestone)
+
+This is a production system, not a demo. These standards are part of each milestone's work, not extra features.
+
+**Code and correctness**
+- No TODO shortcuts in merged code. Every known limitation is listed under "Known limitations" below, with the milestone that removes it.
+- Every error path is handled: no unhandled promise rejections, no crash on bad input. Typed errors (`AppError`, Zod) map to proper HTTP statuses and WS `error`/close codes; unknown errors become a logged 500 with no internals leaked. `unhandledRejection`/`uncaughtException` log fatally and shut down gracefully.
+
+**Configuration and secrets**
+- All config comes from environment variables, validated with Zod at startup (`packages/server/src/config.ts`). The server refuses to start with missing or invalid config and names each problem, never the values. Production has no defaults for DATABASE_URL, REDIS_URL, JWT_SECRET or ALLOWED_ORIGINS, and rejects fault injection and the dev secret.
+- `.env.example` and `.env.prod.example` are committed; real `.env*` files and secrets never are.
+
+**Database**
+- Schema changes only through migrations (`db:generate`). Migrations run on every start, under a Postgres advisory lock so replicas don't race.
+- Multiple writes that must succeed together run in one transaction (board + owner membership; snapshot + prune). Board loads read snapshot + tail in one repeatable-read transaction.
+
+**Security**
+- Everything in system-design.md "Security": upgrade auth (cookie + role + Origin), per-batch role checks, Zod validation with stripped unknown fields, ownership rules, rate limits (ops 200/s per user with throttling then disconnect, messages per socket, 5 sockets per user), bcrypt cost 12, no `innerHTML`.
+- Secure headers (@fastify/helmet on the API; strict CSP and friends from nginx for the app), CORS restricted to ALLOWED_ORIGINS, session cookie httpOnly + Secure (production) + SameSite=Lax, login/signup rate-limited per IP.
+
+**Observability**
+- Structured JSON logs (pino). Every request line has `reqId` (also returned as `x-request-id`), every socket line has `connId` (+ userId, boardId). Passwords, tokens and cookies are redacted and never logged.
+- `/healthz` (process up), `/readyz` (Postgres + Redis reachable, not shutting down), `/metrics` (Prometheus: system-design.md metrics, optional bearer token). None are exposed through the public nginx.
+
+**Reliability**
+- Graceful shutdown on SIGTERM/SIGINT: stop accepting sockets, flush the op log (acks go out), close sockets with 1012 (clients reconnect within ~0.5 s), snapshot rooms, close Postgres/Redis. 25 s hard cap.
+- Every Postgres/Redis call has a timeout. Reads and idempotent writes retry with jittered backoff on transient errors (`withRetry`); non-idempotent inserts fail fast with 503. The OpWriter retries until committed (no ack meanwhile).
+
+**Delivery**
+- GitHub Actions (`.github/workflows/ci.yml`): typecheck, lint, unit, convergence, integration and E2E with Postgres/Redis services on every push and PR, plus a job that builds the production images, starts docker-compose.prod.yml and runs the smoke test.
+- Production images: multi-stage, non-root (server: node user, bundled with esbuild; client: nginx-unprivileged). `docker-compose.prod.yml` runs the full stack with only the app port published, read-only containers and no-new-privileges.
+- Every milestone is verified against the production stack too: build it, start it, run `pnpm test:smoke`.
+
+## Known limitations (each removed by the milestone named)
+
+| Limitation | Removed in |
+| --- | --- |
+| No `lastSeq` catch-up: every (re)connect gets a full snapshot; `catchup_ops` metric not emitted yet | M7 |
+| Tombstones are never garbage-collected (age = `board_ops.created_at` of the delete op) | M7 |
+| Pen tool, eraser, presence (cursors, selections, online list, heartbeats); WS idle sockets rely on nginx's 1 h read timeout until heartbeats | M6 |
+| Undo/redo, sticky notes | M7 |
+| Rate limits, socket caps and the snapshot lock are per server process (in memory); seq is assigned in memory | M8 (Redis: `rl:ws:*`, `INCR seq`, `snap-lock`) |
+| Single server only: no pub/sub between servers, no gap detection | M8 |
+| No share links; members are added by email only | M8 |
+| OpWriter has no "Saving paused" circuit breaker after 30 s of Postgres failures (it retries forever, without acking) | M8 |
+| A logged-out session's existing sockets stay open until they close (JWT is stateless) | M8 (session revocation on logout) |
+| No load test numbers yet | M9 |
 
 ## Core design rules (do not break these)
 
@@ -101,8 +154,9 @@ Decisions (also in the docs):
   (`board_ops.created_at`); `shared` stays free of wall-clock time.
 
 Workflow: one branch per milestone (`milestone-N-name`). I don't check milestones manually: verify each one yourself in a
-real browser (Playwright E2E, plus looking at screenshots), and treat typecheck + lint + unit + convergence +
-integration + E2E all passing as approval to merge into main and tick it off. Every milestone adds E2E tests for its features. E2E reads tab state only through `window.__board` (read-only,
+real browser (Playwright E2E, plus looking at screenshots) and against the production stack (`pnpm test:smoke`), and
+treat typecheck + lint + unit + convergence + integration + E2E + smoke all passing as approval to merge into main and
+tick it off. Every milestone adds E2E tests for its features and follows the Production standards above. E2E reads tab state only through `window.__board` (read-only,
 dev builds only) and acts only through real mouse/keyboard input.
 
 Milestone 2 done and merged: client package, Camera, Renderer (two layers, draw on demand, HiDPI), pan/zoom input,
@@ -135,5 +189,9 @@ backoff (resends pending on welcome). Fault injection for tests: WB_FAULT_COMMIT
 production).
 Numbers for the README (E2E test 5, dev build, bcrypt cost 4 for tests): board with 2,100 ops / 1,000 shapes loads in
 77–176 ms on the server (snapshot seq 2000 + 100-op tail); browser open-to-rendered 0.9–2.6 s (includes Vite dev page load).
-Deferred: tombstone GC (needs deletion wall-clock times; tied to milestone 7's too-far-behind snapshot logic), lastSeq
-catch-up (M7), Redis snapshot lock + INCR seq (M8), share links + login rate limit (M8), OpWriter "Saving paused" breaker.
+Deferred items are tracked in "Known limitations" above.
+
+Production hardening pass (branch `hardening`, merged): everything in "Production standards" above. Verified with the
+production stack on this machine: images build (client 74 MB, server ~250 MB), stack healthy, smoke test passes (sign up,
+draw, reload, shape persists, strict CSP, Secure/httpOnly cookie, /metrics and /readyz not public), production logs have
+no warnings and no secrets. A cold server container is healthy in ~22 s (bundle minified to 1.4 MB).

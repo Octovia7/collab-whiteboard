@@ -14,7 +14,7 @@ export const CLIENT_ORIGIN = 'http://127.0.0.1:5199';
 export const E2E_DB_URL = dbUrl('whiteboard_e2e');
 export const SERVER_LOG = resolve(ROOT, 'test-results/e2e-server.log');
 const PID_FILE = resolve(ROOT, 'test-results/e2e-server.pid');
-const HEALTH = `http://127.0.0.1:${SERVER_PORT}/api/health`;
+const HEALTH = `http://127.0.0.1:${SERVER_PORT}/readyz`;
 
 async function healthy(): Promise<boolean> {
   try {
@@ -32,7 +32,7 @@ async function until(cond: () => Promise<boolean>, what: string, ms = 30_000): P
   }
 }
 
-/** Starts the server (with optional extra env, e.g. fault injection) and waits for /api/health. */
+/** Starts the server (with optional extra env, e.g. fault injection) and waits for /readyz. */
 export async function startServer(env: Record<string, string> = {}): Promise<void> {
   if (await healthy()) throw new Error(`something is already serving on port ${SERVER_PORT}`);
   mkdirSync(dirname(SERVER_LOG), { recursive: true });
@@ -46,6 +46,7 @@ export async function startServer(env: Record<string, string> = {}): Promise<voi
       DATABASE_URL: E2E_DB_URL,
       ALLOWED_ORIGINS: CLIENT_ORIGIN,
       BCRYPT_COST: '4', // fast sign-ups in tests; production uses 12
+      AUTH_RATE_LIMIT_PER_MIN: '1000', // every test context signs up a user from 127.0.0.1
       JWT_SECRET: 'e2e-secret-e2e-secret-e2e-secret-e2e',
       ...env,
     },
