@@ -90,3 +90,11 @@ Decisions (also in the docs):
 - Pen-down `create` leaves `points` unset; the first point goes in `append` chunk 0 in the same batch. `points` is written only at pen-up (algorithms.md §7a).
 - Ops buffered before their create: no time-based expiry; cleared when a fresh snapshot is loaded; capped at 10,000 per board (drop oldest, warn via `onBufferOverflow`). The server never buffers: it rejects updates/appends to unknown shapes (algorithms.md §3).
 - The sticky-note shape type is `'note'` (its content is the `text` property).
+- Stroke points are relative to the stroke's `x, y` (its pen-down point). Its bounding box is computed from the
+  points, never stored; `w`/`h` are unused. Strokes can't be resized in v1: move, recolor, delete only (algorithms.md §7a).
+
+Workflow: one branch per milestone (`milestone-N-name`), merged to main only after I've checked it.
+
+Milestone 2 (branch `milestone-2-canvas`, committed, not merged): client package, Camera, Renderer (two layers, draw on
+demand, HiDPI), pan/zoom input, rect/ellipse/arrow drawing, BoardStore with linear-scan culling, demo shapes (`?demo=N`).
+Waiting for the browser check before merging and ticking. Vite falls back to port 5174 when 5173 is taken.
