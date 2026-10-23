@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+
+# pnpm 10 blocks dependency build scripts unless listed here; esbuild (via Vitest/Vite) needs its postinstall.
+onlyBuiltDependencies:
+  - esbuild
