@@ -13,6 +13,19 @@ export default tseslint.config(
     },
   },
   {
+    // CLAUDE.md rule 12: client and server share code only through @whiteboard/shared.
+    files: ['packages/client/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [{ group: ['@whiteboard/server', '**/server/**'], message: 'Import from @whiteboard/shared, never from the server.' }] }],
+    },
+  },
+  {
+    files: ['packages/server/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [{ group: ['@whiteboard/client', '**/client/**'], message: 'Import from @whiteboard/shared, never from the client.' }] }],
+    },
+  },
+  {
     // CLAUDE.md rule 11: shared runs in plain Node for tests, so no DOM, network or DB code.
     files: ['packages/shared/**/*.ts'],
     rules: {

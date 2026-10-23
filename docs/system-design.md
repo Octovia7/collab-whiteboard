@@ -11,7 +11,7 @@ Up to 30 people edit one board at once, every screen converges to the same state
 - Sign up / log in; create, rename, delete and list boards.
 - Share a board by link with a role: owner, editor or viewer.
 - Tools: select, rectangle, ellipse, arrow, freehand pen, sticky note with text, eraser.
-- Move, resize, recolor, delete, reorder (bring to front / send to back), multi-select, copy/paste.
+- Move, resize, recolor, delete, reorder (bring to front / send to back), multi-select, copy/paste. Freehand strokes can't be resized in v1 (move, recolor, delete only).
 - Live: other people's edits, cursors with names, selections, and an online list.
 - Per-user undo/redo.
 - Infinite canvas with pan and zoom.

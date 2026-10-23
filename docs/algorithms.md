@@ -39,7 +39,8 @@ interface Shape {
   w: number; h: number;
   color: string;
   z: string;                     // fractional index (section 5)
-  points?: number[];             // strokes only, final simplified list: [x1, y1, x2, y2, ...]; set only at pen-up
+  points?: number[];             // strokes only, final simplified list: [x1, y1, x2, y2, ...]; set only at pen-up;
+                                 // relative to the stroke's x, y (section 7a)
   text?: string;
   deleted?: boolean;             // tombstone (section 4)
 }
@@ -326,6 +327,9 @@ The browser fires `pointermove` about 60–120 times a second. Sending each poin
 - A stroke stores its appended chunks keyed by chunk number. Merging is a **union**: a duplicate chunk changes nothing, and chunks arriving out of order are simply placed by number. So appends are commutative and idempotent, like everything else.
 - Only the stroke's author may append (the server enforces this), so two people never write the same chunk.
 - **Rendering rule:** if the stroke's `points` register is set (the pen-up update), draw that; otherwise draw the chunks concatenated in chunk-number order.
+- **Coordinates are relative.** A stroke's `x, y` is its pen-down point, and every point, in chunks and in `points`, is an offset from it. Moving a stroke is then a plain `update { x, y }` like any other shape, instead of rewriting every point.
+- **Bounding box is computed, not stored:** the min/max of the points, offset by `x, y`, plus half the line width (section 11a). A stroke's `w`/`h` are not used.
+- **No resizing in v1:** strokes can be moved, recolored and deleted only.
 - **`points` is written only at pen-up**, never by the create. If the create set it, the rendering rule would draw just that first point and hide every streamed chunk until pen-up.
 - Appends that arrive before their `create` are buffered, the same as updates (section 3).
 - The convergence test includes random appends and the pen-up update.
@@ -577,7 +581,7 @@ A quadtree divides the board into squares so you only examine shapes near the sc
 
 ### 11a. Bounding boxes first
 
-Every shape gets an **axis-aligned bounding box (AABB)**: the smallest upright rectangle containing it. For a rectangle that's itself; for a stroke, the min/max of its points plus half the line width. Two boxes overlap unless one is entirely left, right, above or below the other:
+Every shape gets an **axis-aligned bounding box (AABB)**: the smallest upright rectangle containing it. For a rectangle that's itself; for a stroke, the min/max of its points (which are relative, so add the stroke's `x, y`) plus half the line width. Stroke boxes are always computed from the points, never stored. Two boxes overlap unless one is entirely left, right, above or below the other:
 
 ```ts
 interface Box { minX: number; minY: number; maxX: number; maxY: number }
