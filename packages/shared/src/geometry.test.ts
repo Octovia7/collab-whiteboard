@@ -6,6 +6,7 @@ import {
   expandBox,
   hitShape,
   overlaps,
+  rdp,
   rectBounds,
   shapeBounds,
   strokeBounds,
@@ -94,5 +95,79 @@ describe('hitShape', () => {
   it('note: filled, so the inside counts', () => {
     expect(hitShape({ type: 'note', x: 0, y: 0, w: 100, h: 100 }, pt(50, 50), 0)).toBe(true);
     expect(hitShape({ type: 'note', x: 0, y: 0, w: 100, h: 100 }, pt(105, 50), 4)).toBe(false);
+  });
+});
+
+describe('rdp', () => {
+  const wobbly = (n: number, amp: number) => Array.from({ length: n }, (_, i) => [i, Math.sin(i * 1.7) * amp]).flat();
+
+  it('collapses a nearly straight line to its two ends (algorithms.md §7b example)', () => {
+    // Amplitude 0.4: even measured from the slightly tilted end-to-end line, nothing strays past 1.
+    expect(rdp(wobbly(100, 0.4), 1)).toEqual([0, 0, 99, Math.sin(99 * 1.7) * 0.4]);
+  });
+
+  it('keeps the tip of a V: 3 points', () => {
+    const v: number[] = [];
+    for (let i = 0; i <= 50; i++) v.push(i, i < 25 ? i : 50 - i);
+    expect(rdp(v, 1)).toEqual([0, 0, 25, 25, 50, 0]);
+  });
+
+  it('returns short inputs unchanged and drops a dangling odd value', () => {
+    expect(rdp([], 1)).toEqual([]);
+    expect(rdp([1, 2], 1)).toEqual([1, 2]);
+    expect(rdp([1, 2, 3, 4, 5], 1)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('every dropped point is within epsilon of the line through its kept neighbours; output is a subsequence', () => {
+    let seed = 7;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let trial = 0; trial < 50; trial++) {
+      const pts: number[] = [];
+      let x = 0;
+      let y = 0;
+      for (let i = 0; i < 300; i++) {
+        x += rand() * 4 - 1;
+        y += rand() * 4 - 2;
+        pts.push(x, y);
+      }
+      const eps = 0.5 + rand() * 3;
+      const out = rdp(pts, eps);
+      // Subsequence, ends kept: record which input index each output point came from.
+      expect(out.slice(0, 2)).toEqual(pts.slice(0, 2));
+      expect(out.slice(-2)).toEqual(pts.slice(-2));
+      const keptIdx: number[] = [];
+      let j = 0;
+      for (let i = 0; i < out.length; i += 2) {
+        while (j < pts.length && (pts[j] !== out[i] || pts[j + 1] !== out[i + 1])) j += 2;
+        expect(j < pts.length, 'output point not found in order').toBe(true);
+        keptIdx.push(j / 2);
+        j += 2;
+      }
+      // RDP's guarantee: each dropped point is within epsilon of the (infinite) line through the
+      // two kept points around it. Not the segment: a stroke that doubles back can project past it.
+      for (let k = 0; k + 1 < keptIdx.length; k++) {
+        const a = keptIdx[k] as number;
+        const b = keptIdx[k + 1] as number;
+        const ax = pts[2 * a] as number;
+        const ay = pts[2 * a + 1] as number;
+        const dx = (pts[2 * b] as number) - ax;
+        const dy = (pts[2 * b + 1] as number) - ay;
+        const len = Math.hypot(dx, dy);
+        for (let i = a + 1; i < b; i++) {
+          const px = (pts[2 * i] as number) - ax;
+          const py = (pts[2 * i + 1] as number) - ay;
+          const d = len === 0 ? Math.hypot(px, py) : Math.abs(dy * px - dx * py) / len;
+          expect(d).toBeLessThanOrEqual(eps + 1e-9);
+        }
+      }
+    }
+  });
+
+  it('handles a 20,000-point worst case without blowing the stack', () => {
+    // A spiral: almost every point is a split point.
+    const pts: number[] = [];
+    for (let i = 0; i < 20_000; i++) pts.push(Math.cos(i / 50) * i, Math.sin(i / 50) * i);
+    const out = rdp(pts, 0.01);
+    expect(out.length).toBeGreaterThan(1000);
   });
 });

@@ -65,7 +65,15 @@ test('sign up, draw, reload: the shape persists on the production stack', async 
   await page.mouse.move(460, 400, { steps: 8 });
   await page.mouse.up();
   await expect.poll(() => inkAt(page, 300, 350)).toBe(true); // left edge
-  await page.waitForTimeout(1000); // let the ack arrive (it follows the Postgres commit)
+
+  // A freehand stroke with the pen, below the rectangle.
+  await page.getByRole('button', { name: 'Pen', exact: true }).click();
+  await page.mouse.move(300, 550);
+  await page.mouse.down();
+  for (let i = 1; i <= 30; i++) await page.mouse.move(300 + i * 10, 550 + Math.sin(i / 5) * 30);
+  await page.mouse.up();
+  await expect.poll(() => inkAt(page, 300, 550)).toBe(true);
+  await page.waitForTimeout(1000); // let the acks arrive (they follow the Postgres commit)
 
   // Reload: the shape comes back from the server.
   await page.reload();
@@ -73,6 +81,7 @@ test('sign up, draw, reload: the shape persists on the production stack', async 
   await expect.poll(() => inkAt(page, 300, 350)).toBe(true);
   await expect.poll(() => inkAt(page, 460, 350)).toBe(true); // right edge
   expect(await inkAt(page, 380, 350)).toBe(false); // unfilled inside
+  await expect.poll(() => inkAt(page, 300, 550)).toBe(true); // the pen stroke came back too
   await page.screenshot({ path: 'test-results/screens/prod-smoke.png' });
 
   expect(problems).toEqual([]);

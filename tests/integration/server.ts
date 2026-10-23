@@ -5,6 +5,7 @@ import { buildApp } from '../../packages/server/src/app';
 import type { App } from '../../packages/server/src/app';
 import { loadConfig } from '../../packages/server/src/config';
 import { BoardStore } from '../../packages/client/src/store/BoardStore';
+import { Presence } from '../../packages/client/src/store/Presence';
 import { SyncClient } from '../../packages/client/src/sync/SyncClient';
 import { dbUrl, truncateAll } from './db';
 
@@ -85,18 +86,21 @@ export async function waitFor(cond: () => boolean, what: string, ms = 5000): Pro
 const started: SyncClient[] = [];
 
 /** A signed-in tab: BoardStore + SyncClient connected to the server on `port`. */
-export async function tab(port: number, boardId: string, cookie: string, clientId: string) {
+export async function tab(port: number, boardId: string, cookie: string, clientId: string, options: { heartbeatMs?: number } = {}) {
   const store = new BoardStore(clientId);
+  const presence = new Presence();
   const sync = new SyncClient(store, {
     url: `ws://127.0.0.1:${port}/ws?board=${boardId}`,
     boardId,
     flushMs: 5,
+    ...options,
     WebSocketImpl: cookieWebSocket(cookie),
+    presence,
   });
   started.push(sync);
   sync.start();
   await waitFor(() => sync.status === 'connected', `${clientId} to connect`);
-  return { store, sync };
+  return { store, sync, presence };
 }
 
 export function stopTabs(): void {

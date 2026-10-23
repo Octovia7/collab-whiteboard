@@ -10,7 +10,8 @@ function setup(zoom = 1) {
   const selection = new Selection();
   const camera = new Camera();
   camera.zoom = zoom;
-  const tools = new ToolController(store, selection, camera, () => {});
+  let clock = 0;
+  const tools = new ToolController(store, selection, camera, () => {}, () => clock);
   const batches: Op[][] = [];
   store.events.on('submit', (e) => batches.push(e.ops));
   const key = (k: string) => tools.keyDown({ key: k, ctrlKey: false, metaKey: false, altKey: false });
@@ -26,7 +27,10 @@ function setup(zoom = 1) {
     tools.pointerDown(p, e);
     tools.pointerUp(p, e);
   };
-  return { store, selection, camera, tools, batches, key, drag, shiftClick };
+  const advance = (ms: number) => {
+    clock += ms;
+  };
+  return { store, selection, camera, tools, batches, key, drag, shiftClick, advance };
 }
 
 function drawRect(t: ReturnType<typeof setup>, from: Point, to: Point): string {

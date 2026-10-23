@@ -5,12 +5,32 @@ import type { OpStore, StoredOp } from '../persistence/OpStore';
 import { Room } from './Room';
 import type { Peer } from './Room';
 
-function peer(userId: string, role: Role = 'editor'): Peer & { inbox: ServerMessage[]; closed: number | null } {
+const PRESENCE_TYPES = new Set(['peer-join', 'peer-leave', 'cursor', 'select']);
+let peerCounter = 0;
+
+/** A fake socket. Presence messages land in `presence`, everything else in `inbox`. */
+function peer(userId: string, role: Role = 'editor') {
   const inbox: ServerMessage[] = [];
-  const p = { userId, role, inbox, closed: null as number | null, send: (m: ServerMessage) => void inbox.push(m), close: (code: number) => {
-    p.closed = code;
-  } };
-  return p;
+  const presence: ServerMessage[] = [];
+  const p = {
+    peerId: `peer-${++peerCounter}`,
+    userId,
+    name: userId.toUpperCase(),
+    role,
+    lastSeen: 0,
+    inbox,
+    presence,
+    closed: null as number | null,
+    terminated: false,
+    send: (m: ServerMessage) => void (PRESENCE_TYPES.has(m.t) ? presence : inbox).push(m),
+    close: (code: number) => {
+      p.closed = code;
+    },
+    terminate: () => {
+      p.terminated = true;
+    },
+  };
+  return p satisfies Peer;
 }
 
 const stamp = (t: number) => ({ t, client: 'c' });
@@ -192,5 +212,50 @@ describe('Room: persistence and membership', () => {
     room.disconnect(null, 4004, 'board_deleted');
     expect(a.closed).toBe(4004);
     expect(room.peerCount).toBe(0);
+  });
+});
+
+describe('Room: presence', () => {
+  it('welcome lists who is already here; others hear peer-join and peer-leave', () => {
+    const room = new Room('b', new MemoryOpStore());
+    const a = peer('ua');
+    const b = peer('ub');
+    room.join(a);
+    const welcome = room.join(b);
+    expect(welcome).toMatchObject({ you: { peerId: b.peerId, userId: 'ub', name: 'UB' }, peers: [{ peerId: a.peerId, userId: 'ua', name: 'UA' }] });
+    expect(a.presence).toEqual([{ t: 'peer-join', peer: { peerId: b.peerId, userId: 'ub', name: 'UB' } }]);
+    room.leave(b);
+    expect(a.presence.at(-1)).toEqual({ t: 'peer-leave', peerId: b.peerId });
+    room.leave(b); // leaving twice announces once
+    expect(a.presence.filter((m) => m.t === 'peer-leave')).toHaveLength(1);
+  });
+
+  it('relays cursors and selections to everyone else, viewers included, and never applies them', () => {
+    const room = new Room('b', new MemoryOpStore());
+    const a = peer('ua', 'viewer');
+    const b = peer('ub');
+    room.join(a);
+    room.join(b);
+    room.relayPresence(a, { t: 'cursor', x: 10, y: 20 });
+    room.relayPresence(a, { t: 'select', ids: ['x-1'] });
+    expect(b.presence.slice(-2)).toEqual([
+      { t: 'cursor', peerId: a.peerId, x: 10, y: 20 },
+      { t: 'select', peerId: a.peerId, ids: ['x-1'] },
+    ]);
+    expect(a.presence.some((m) => m.t === 'cursor')).toBe(false); // not echoed back
+    expect(room.snapshot().shapes).toEqual([]);
+    expect(room.currentSeq).toBe(0);
+  });
+
+  it('sweep terminates peers silent since before the cutoff', () => {
+    const room = new Room('b', new MemoryOpStore());
+    const fresh = peer('ua');
+    const stale = peer('ub');
+    fresh.lastSeen = 100;
+    stale.lastSeen = 10;
+    room.join(fresh);
+    room.join(stale);
+    expect(room.sweep(50)).toBe(1);
+    expect([fresh.terminated, stale.terminated]).toEqual([false, true]);
   });
 });

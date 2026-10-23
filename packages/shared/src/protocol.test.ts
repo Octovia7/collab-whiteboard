@@ -9,6 +9,8 @@ describe('client messages', () => {
   it('accepts hello, ops and ping', () => {
     expect(ok({ t: 'hello', boardId: 'board-1', lastSeq: 0 })).toBe(true);
     expect(ok({ t: 'ping' })).toBe(true);
+    expect(ok({ t: 'cursor', x: 10.5, y: -3 })).toBe(true);
+    expect(ok({ t: 'select', ids: ['abc-1', 'abc-2'] })).toBe(true);
     expect(
       ok({
         t: 'ops',
@@ -26,6 +28,10 @@ describe('client messages', () => {
     expect(ok({ t: 'nope' })).toBe(false);
     expect(ok({ t: 'hello', boardId: 'bad board!', lastSeq: 0 })).toBe(false);
     expect(ok({ t: 'ops', ops: [] })).toBe(false);
+    expect(ok({ t: 'cursor', x: 'left', y: 0 })).toBe(false);
+    expect(ok({ t: 'cursor', x: 1e12, y: 0 })).toBe(false);
+    expect(ok({ t: 'select', ids: ['not an id'] })).toBe(false);
+    expect(ok({ t: 'select', ids: Array.from({ length: 1001 }, (_, i) => `a-${i}`) })).toBe(false);
   });
 
   it('enforces op limits and value checks', () => {
@@ -54,12 +60,17 @@ describe('client messages', () => {
 describe('server messages', () => {
   it('parses each type', () => {
     const okS = (m: unknown) => parseServerMessage(JSON.stringify(m)).ok;
-    expect(okS({ t: 'welcome', you: { userId: 'u' }, role: 'editor', peers: [], snapshot: { shapes: [] }, seq: 0 })).toBe(true);
+    const me = { peerId: 'p1', userId: 'u', name: 'Ada' };
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [{ ...me, peerId: 'p2' }], snapshot: { shapes: [] }, seq: 0 })).toBe(true);
+    expect(okS({ t: 'peer-join', peer: me })).toBe(true);
+    expect(okS({ t: 'peer-leave', peerId: 'p1' })).toBe(true);
+    expect(okS({ t: 'cursor', peerId: 'p1', x: 1, y: 2 })).toBe(true);
+    expect(okS({ t: 'select', peerId: 'p1', ids: ['a-1'] })).toBe(true);
     expect(okS({ t: 'ack', opIds: ['a:1'], seq: 3 })).toBe(true);
     expect(okS({ t: 'reject', opId: 'a:1', reason: 'unknown_shape', shape: null })).toBe(true);
     expect(okS({ t: 'error', code: 'bad_message', message: 'x' })).toBe(true);
     expect(okS({ t: 'role', role: 'viewer' })).toBe(true);
     expect(okS({ t: 'role', role: 'admin' })).toBe(false);
-    expect(okS({ t: 'welcome', you: { userId: 'u' }, role: 'editor', peers: [], snapshot: null, seq: 0 })).toBe(false);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], snapshot: null, seq: 0 })).toBe(false);
   });
 });
