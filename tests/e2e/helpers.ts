@@ -9,15 +9,53 @@ declare global {
   }
 }
 
-/** A fresh board id per test, so tests never see each other's shapes. */
-export function newBoardId(name: string): string {
-  return `e2e-${name}-${Math.random().toString(36).slice(2, 8)}`;
+const opened: BrowserContext[] = [];
+
+export const PASSWORD = 'password123';
+
+export interface TestUser {
+  id: string;
+  email: string;
+  name: string;
 }
 
-/** Opens a tab in its own browser context (separate storage, like a separate user) and waits for welcome. */
-export async function openTab(browser: Browser, boardId: string): Promise<Page> {
+let userCounter = 0;
+
+/**
+ * A new browser context (separate cookies and storage: a separate person) with a freshly
+ * signed-up user. The context's request API shares its cookies, so the session applies to
+ * pages opened in it.
+ */
+export async function newUser(browser: Browser, label = 'user'): Promise<{ context: BrowserContext; user: TestUser }> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   opened.push(context);
+  const email = `${label}-${Date.now().toString(36)}-${++userCounter}@e2e.test`;
+  const res = await context.request.post('/api/auth/signup', { data: { email, name: label, password: PASSWORD } });
+  expect(res.status(), await res.text()).toBe(201);
+  const { user } = (await res.json()) as { user: TestUser };
+  return { context, user };
+}
+
+/** A new, logged-out browser context. */
+export async function freshContext(browser: Browser): Promise<BrowserContext> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  opened.push(context);
+  return context;
+}
+
+export async function createBoard(context: BrowserContext, title = 'E2E board'): Promise<string> {
+  const res = await context.request.post('/api/boards', { data: { title } });
+  expect(res.status()).toBe(201);
+  return ((await res.json()) as { board: { id: string } }).board.id;
+}
+
+export async function addMember(owner: BrowserContext, boardId: string, email: string, role: 'editor' | 'viewer'): Promise<void> {
+  const res = await owner.request.post(`/api/boards/${boardId}/members`, { data: { email, role } });
+  expect(res.status(), await res.text()).toBe(201);
+}
+
+/** Opens the board in a new page of `context` and waits for the server's welcome. */
+export async function openBoardPage(context: BrowserContext, boardId: string): Promise<Page> {
   const page = await context.newPage();
   page.on('pageerror', (err) => {
     throw err;
@@ -25,6 +63,34 @@ export async function openTab(browser: Browser, boardId: string): Promise<Page> 
   await page.goto(`/?board=${boardId}`);
   await page.waitForFunction(() => window.__board?.status() === 'connected');
   return page;
+}
+
+/**
+ * `n` tabs on a new board, each a different signed-in user: the first owns the board, the
+ * others are editors.
+ */
+export async function openTabs(browser: Browser, n: number) {
+  const owner = await newUser(browser, 'owner');
+  const boardId = await createBoard(owner.context);
+  const pages = [await openBoardPage(owner.context, boardId)];
+  for (let i = 1; i < n; i++) pages.push(await joinTab(browser, boardId, owner.context));
+  return {
+    boardId,
+    owner: owner.context,
+    pages,
+    page(i: number): Page {
+      const p = pages[i];
+      if (!p) throw new Error(`no tab ${i}`);
+      return p;
+    },
+  };
+}
+
+/** A new user, added to the board with `role` by the owner, opening it in a tab. */
+export async function joinTab(browser: Browser, boardId: string, owner: BrowserContext, role: 'editor' | 'viewer' = 'editor'): Promise<Page> {
+  const { context, user } = await newUser(browser, role);
+  await addMember(owner, boardId, user.email, role);
+  return openBoardPage(context, boardId);
 }
 
 export const shapes = (page: Page): Promise<Shape[]> => page.evaluate(readShapes);
@@ -99,8 +165,6 @@ export async function outlinePoint(page: Page, s: Shape): Promise<Point> {
       return toScreen(page, minX, minY + h / 4); // left side, a quarter of the way down
   }
 }
-
-const opened: BrowserContext[] = [];
 
 /** Closes every context opened with openTab; call from test.afterEach. */
 export async function closeTabs(): Promise<void> {

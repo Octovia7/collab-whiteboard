@@ -11,9 +11,10 @@
     ]
   },
   "include": [
+    "playwright.config.ts",
     "tests",
     "vitest.config.ts",
     "vitest.convergence.config.ts",
-    "playwright.config.ts"
+    "vitest.integration.config.ts"
   ]
 }

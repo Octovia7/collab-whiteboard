@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { camera, closeTabs, drag, drawShape, expectConverged, outlinePoint, newBoardId, openTab, selection, shapeById, shapes, snapshot, toScreen, toWorld } from './helpers';
+import { camera, closeTabs, drag, drawShape, expectConverged, outlinePoint, openTabs, selection, shapeById, shapes, snapshot, toScreen, toWorld } from './helpers';
 
 test.afterEach(closeTabs);
 
 test('6. zoom keeps the world point under the cursor; pan moves the camera (milestone 2)', async ({ browser }) => {
-  const page = await openTab(browser, newBoardId('camera'));
+  const page = (await openTabs(browser, 1)).page(0);
   const cursor = { x: 700, y: 450 };
 
   const before = await toWorld(page, cursor.x, cursor.y);
@@ -42,7 +42,7 @@ test('6. zoom keeps the world point under the cursor; pan moves the camera (mile
 });
 
 test('7. draw, select, move, resize, box-select, recolor, front/back and delete (milestone 3)', async ({ browser }) => {
-  const page = await openTab(browser, newBoardId('tools'));
+  const page = (await openTabs(browser, 1)).page(0);
 
   // Draw one of each shape; each switches back to the select tool with the new shape selected.
   const rect = await drawShape(page, 'Rectangle', { x: 300, y: 250 }, { x: 420, y: 330 });
