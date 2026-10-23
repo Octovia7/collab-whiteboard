@@ -134,15 +134,28 @@ export class Board {
   /** Canonical form: two converged boards produce deep-equal snapshots. Buffered ops are not included. */
   snapshot(): BoardSnapshot {
     const ids = [...this.shapes.keys()].sort(compareStrings);
-    return {
-      shapes: ids.map((id) => {
-        const shape = this.shapes.get(id) as StoredShape;
-        const regs: Registers = {};
-        for (const key of (Object.keys(shape.regs) as PropKey[]).sort(compareStrings)) regs[key] = shape.regs[key];
-        const chunks = [...shape.chunks.entries()].sort((a, b) => a[0] - b[0]);
-        return { id, regs, chunks };
-      }),
-    };
+    return { shapes: ids.map((id) => this.snapshotShape(id) as SnapshotShape) };
+  }
+
+  /** One shape's registers and chunks, in snapshot form; undefined if it was never created. */
+  snapshotShape(id: ShapeId): SnapshotShape | undefined {
+    const shape = this.shapes.get(id);
+    if (!shape) return undefined;
+    const regs: Registers = {};
+    for (const key of (Object.keys(shape.regs) as PropKey[]).sort(compareStrings)) regs[key] = shape.regs[key];
+    const chunks = [...shape.chunks.entries()].sort((a, b) => a[0] - b[0]);
+    return { id, regs, chunks };
+  }
+
+  /**
+   * Overwrites one shape with an authoritative version, ignoring LWW (null = remove it).
+   * Only for rollback after the server rejects a local op: the rejected op carried a newer
+   * stamp than anything the server holds, so a normal LWW merge would keep the bad value.
+   * Not a CRDT operation; never use it for ops that peers also receive.
+   */
+  replaceShape(id: ShapeId, s: SnapshotShape | null): void {
+    if (s === null) this.shapes.delete(id);
+    else this.shapes.set(id, { regs: { ...s.regs }, chunks: new Map(s.chunks) });
   }
 
   /** Builds a board from `snapshot()`. Takes ownership of the snapshot's objects. */
@@ -251,6 +264,19 @@ function writeProps(shape: StoredShape, props: Partial<ShapeProps>, stamp: Stamp
     const cur = shape.regs[key];
     if (!cur || compareStamps(stamp, cur.stamp) > 0) shape.regs[key] = { value, stamp };
   }
+}
+
+/**
+ * The highest Lamport time in a snapshot. A client loading a snapshot must observe it, so its
+ * next edit is stamped later than everything already on the board (algorithms.md §2).
+ */
+export function maxStampT(snapshot: BoardSnapshot): number {
+  let max = 0;
+  for (const s of snapshot.shapes) {
+    for (const reg of Object.values(s.regs)) if (reg && reg.stamp.t > max) max = reg.stamp.t;
+    for (const [, chunk] of s.chunks) if (chunk.stamp.t > max) max = chunk.stamp.t;
+  }
+  return max;
 }
 
 function compareStrings(a: string, b: string): number {

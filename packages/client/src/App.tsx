@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { boardIdFromUrl, socketUrl } from './boardId';
 import { Camera } from './canvas/Camera';
 import { PanZoomInput } from './canvas/PanZoomInput';
 import { Renderer } from './canvas/Renderer';
@@ -6,7 +7,9 @@ import { ToolInput } from './canvas/ToolInput';
 import { demoCountFromUrl, seedDemo } from './demo';
 import { BoardStore } from './store/BoardStore';
 import { Selection } from './store/Selection';
+import { SyncClient } from './sync/SyncClient';
 import { ToolController } from './tools/ToolController';
+import { ConnectionBadge } from './ui/ConnectionBadge';
 import { Toolbar } from './ui/Toolbar';
 import { ZoomControls } from './ui/ZoomControls';
 
@@ -14,7 +17,9 @@ import { ZoomControls } from './ui/ZoomControls';
 const newClientId = () => crypto.randomUUID().slice(0, 8);
 
 interface Board {
+  boardId: string;
   store: BoardStore;
+  sync: SyncClient;
   camera: Camera;
   selection: Selection;
   tools: ToolController;
@@ -23,8 +28,9 @@ interface Board {
 }
 
 function createBoard(): Board {
+  const boardId = boardIdFromUrl();
   const store = new BoardStore(newClientId());
-  seedDemo(store, demoCountFromUrl());
+  const sync = new SyncClient(store, { url: socketUrl(boardId), boardId });
   const camera = new Camera();
   // Start with a small margin so the first shapes aren't flush against the corner.
   camera.x = -40;
@@ -32,7 +38,7 @@ function createBoard(): Board {
   const selection = new Selection();
   const redrawOverlay = { current: () => {} };
   const tools = new ToolController(store, selection, camera, () => redrawOverlay.current());
-  return { store, camera, selection, tools, redrawOverlay };
+  return { boardId, store, sync, camera, selection, tools, redrawOverlay };
 }
 
 export function App() {
@@ -48,7 +54,7 @@ export function App() {
     const scene = sceneRef.current;
     const overlay = overlayRef.current;
     if (!container || !scene || !overlay) return;
-    const { store, camera, selection, tools, redrawOverlay } = board;
+    const { store, sync, camera, selection, tools, redrawOverlay } = board;
 
     const renderer = new Renderer(container, scene, overlay, store, camera);
     renderer.setOverlayDrawer((ctx, cam) => tools.drawOverlay(ctx, cam));
@@ -65,7 +71,17 @@ export function App() {
     // A selected shape deleted by someone else (or by undo, later) drops out of the selection.
     const offPrune = store.events.on('change', () => selection.retain((id) => store.isVisible(id)));
 
+    // ?demo=N seeds only an empty board, after the server's snapshot has arrived, so a second
+    // tab on the same board doesn't add another copy.
+    const demo = demoCountFromUrl();
+    const offWelcome = sync.events.on('welcome', () => {
+      if (demo > 0 && store.size === 0) seedDemo(store, demo);
+    });
+    sync.start();
+
     return () => {
+      sync.stop();
+      offWelcome();
       offPrune();
       offSelection();
       detachTools();
@@ -88,6 +104,7 @@ export function App() {
       </div>
       <Toolbar tools={board.tools} selection={board.selection} />
       <ZoomControls camera={board.camera} getCenter={getCenter} />
+      <ConnectionBadge sync={board.sync} boardId={board.boardId} />
     </>
   );
 }
