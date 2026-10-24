@@ -43,6 +43,11 @@ pnpm typecheck && pnpm lint
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --wait   # app on :8080
 pnpm test:smoke               # Playwright smoke test against the running production stack
 node scripts/measure-startup.mjs 3   # recreate the prod server container 3x; prints startup phases and time to healthy
+
+# Benchmarks against the production stack (start it with AUTH_RATE_LIMIT_PER_MIN=1000 so the bots can sign up)
+pnpm bench:load               # load ramp (BOT_STEPS, WORKERS, MEASURE_MS, CURSOR_MS, MIN_FREE_MB) -> docs/bench-results
+pnpm bench:chaos              # kill a replica, restart/flush Redis, pause Postgres, under load (BOTS, PG_PAUSE_MS)
+gh workflow run load-test.yml -f steps=10,20,30,50,100   # the load ramp on a GitHub runner; results as an artifact
 ```
 
 Keep these scripts working; add new ones to this list when you create them.
@@ -84,7 +89,6 @@ This is a production system, not a demo. These standards are part of each milest
 
 | Limitation | Removed in |
 | --- | --- |
-| No load test numbers yet | M9 |
 
 ## Core design rules (do not break these)
 
@@ -132,7 +136,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Pen tool (streaming, RDP, smoothing), eraser, presence
 - [x] Undo/redo, sticky notes, reconnect + catch-up
 - [x] Redis pub/sub multi-server, sharing, rate limits
-- [ ] E2E, chaos and load tests
+- [x] E2E, chaos and load tests
 - [ ] Deploy, README, demo video
 
 **Session 2026-10-23:** milestone 1 done. pnpm is pinned to 10.18.3 (pnpm 12 doesn't run under Node 22.20's corepack).
@@ -243,3 +247,14 @@ batches dropped unapplied, clients resend on resume. Share links (`PUT/GET /api/
 `?join=` route. Config: SERVER_ID, SAVE_PAUSE_AFTER_MS, GAP_POLL_MS, GAP_HOLE_MS, WB_FAULT_CONTROL (test-only route
 `POST /api/__test/faults`, refused in production). Tests: Redis db 1 (integration) / 2 (E2E), flushed like Postgres.
 E2E harness runs against built output (two bundled servers, two `vite preview` clients) instead of tsx + Vite dev servers.
+
+Milestone 9 done and merged (see docs/benchmarks.md): load ramp (`scripts/bench/load.ts`) and chaos test
+(`scripts/bench/chaos.ts`) against the production stack, plus a manual GitHub workflow for the ramp (`load-test.yml`).
+Headline (GitHub runner, 2 vCPU, everything on one host, so a lower bound): one board holds p95 < 150 ms up to 50 editors
+(p50 21 / p95 66 / p99 97 ms, 248 ops/s, 12k deliveries/s); crosses between 50 and 60. Laptop (5.8 GB RAM, cursors not yet
+batched): crosses between 10 and 20; stopped at 20 for low RAM. Chaos (laptop, 10 editors): replica kill -> reconnect 2.7 s,
+Redis restart and FLUSHALL -> no seq collisions, Postgres frozen 40 s -> "Saving paused" at 32 s, nothing lost, all converged.
+Found and fixed: nginx waited 60 s on a dead replica (now 2 s connect timeout, failed replica skipped 10 s); a frozen
+Postgres never showed "Saving paused" (outage clock from the batch's first attempt + watchdog); cursor fan-out was O(n^2)
+(server now batches cursors: one `cursors` message per socket per 50 ms). Known limit: an overloaded replica closes sockets
+(1013) on Redis timeouts, which adds reconnect load. Benchmark results in docs/bench-results (github/, laptop/, superseded/).
