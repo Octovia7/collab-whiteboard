@@ -11,6 +11,7 @@ const TOOLS: { name: ToolName; label: string; key: string }[] = [
   { name: 'arrow', label: 'Arrow', key: 'A' },
   { name: 'pen', label: 'Pen', key: 'P' },
   { name: 'eraser', label: 'Eraser', key: 'E' },
+  { name: 'note', label: 'Note', key: 'N' },
 ];
 
 interface Props {

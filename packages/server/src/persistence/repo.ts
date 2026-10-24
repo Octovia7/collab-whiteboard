@@ -174,7 +174,7 @@ export class Repo {
             .limit(1);
           const after = snap?.seq ?? 0;
           const ops = await tx
-            .select({ boardId: boardOps.boardId, seq: boardOps.seq, opId: boardOps.opId, userId: boardOps.userId, op: boardOps.op })
+            .select({ boardId: boardOps.boardId, seq: boardOps.seq, opId: boardOps.opId, userId: boardOps.userId, op: boardOps.op, createdAt: boardOps.createdAt })
             .from(boardOps)
             .where(and(eq(boardOps.boardId, boardId), gt(boardOps.seq, after)))
             .orderBy(asc(boardOps.seq));

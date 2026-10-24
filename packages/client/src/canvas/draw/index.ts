@@ -1,6 +1,7 @@
 import type { Shape } from '@whiteboard/shared';
 import { drawArrow } from './arrow';
 import { drawEllipse } from './ellipse';
+import { drawNote } from './note';
 import { drawRect } from './rect';
 import { drawStroke } from './stroke';
 
@@ -18,8 +19,8 @@ export function drawShape(ctx: CanvasRenderingContext2D, s: Shape, strokePoints:
       return drawArrow(ctx, s);
     case 'stroke':
       return drawStroke(ctx, s, strokePoints);
-    case 'note': // milestone 7: sticky note with text
-      return;
+    case 'note':
+      return drawNote(ctx, s);
     default: {
       // Compile error here if a new ShapeType is added without a drawer.
       const unknown: never = s.type;

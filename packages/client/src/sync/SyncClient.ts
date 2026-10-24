@@ -5,7 +5,7 @@ import type { BoardStore } from '../store/BoardStore';
 import type { Presence } from '../store/Presence';
 import { enqueueCoalesced } from './coalesce';
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'disconnected';
 
 /** Reconnect delays (system-design.md, "SyncClient"): 0.5 s, 1 s, 2 s, ... capped at 10 s. */
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 10_000];
@@ -66,6 +66,12 @@ export class SyncClient {
   private cursorTimer: ReturnType<typeof setTimeout> | null = null;
   private lastCursorSent = 0;
   private lastSelection = '';
+  private typingIn: string | null = null;
+  /** performance.now() of the last message from the server (dead-connection detection). */
+  private lastReceivedAt = 0;
+  private offlineListeners: (() => void) | null = null;
+  /** How the board arrived on the last welcome: a full snapshot, or catch-up ops. */
+  lastWelcome: { kind: 'snapshot' | 'ops'; ops: number } | null = null;
   private lastSentAt = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
 
@@ -105,8 +111,20 @@ export class SyncClient {
     // so the server doesn't drop us as a closed laptop lid.
     const heartbeatMs = this.options.heartbeatMs ?? PRESENCE.heartbeatMs;
     this.heartbeat = setInterval(() => {
-      if (this.welcomed && performance.now() - this.lastSentAt >= heartbeatMs) this.send({ t: 'ping' });
+      if (!this.welcomed) return;
+      const now = performance.now();
+      // The server answers every ping with a pong. Nothing at all for three heartbeats means
+      // the connection is dead without having closed (sleep, a dropped NAT mapping): close it
+      // ourselves and reconnect, instead of typing into a socket that goes nowhere.
+      if (now - this.lastReceivedAt > heartbeatMs * 3) {
+        this.socket?.close();
+        return;
+      }
+      // Ping when we've been quiet, and also when the server has: a client that only sends
+      // (cursor moves, with nobody else on the board) would otherwise never hear anything back.
+      if (now - this.lastSentAt >= heartbeatMs || now - this.lastReceivedAt >= heartbeatMs) this.send({ t: 'ping' });
     }, heartbeatMs / 2);
+    this.watchNetwork();
     this.offSubmit = this.store.events.on('submit', ({ ops }) => {
       for (const op of ops) enqueueCoalesced(this.outbox, op);
       this.scheduleFlush();
@@ -116,6 +134,8 @@ export class SyncClient {
 
   stop(): void {
     this.stopped = true;
+    this.offlineListeners?.();
+    this.offlineListeners = null;
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
     if (this.cursorTimer) clearTimeout(this.cursorTimer);
@@ -158,6 +178,13 @@ export class SyncClient {
     if (this.welcomed) this.send({ t: 'select', ids: [...ids].slice(0, LIMITS.maxSelectedIds) });
   }
 
+  /** I started (id) or stopped (null) editing a note's text: other tabs show it as being typed in. */
+  sendTyping(id: string | null): void {
+    if (id === this.typingIn) return;
+    this.typingIn = id;
+    if (this.welcomed) this.send({ t: 'typing', id });
+  }
+
   /** Sends everything queued now instead of waiting for the timer. */
   flush(): void {
     const socket = this.socket;
@@ -176,9 +203,13 @@ export class SyncClient {
     this.socket = socket;
     if (this.attempts === 0) this.setStatus('connecting');
     socket.onopen = () => this.send({ t: 'hello', boardId: this.options.boardId, lastSeq: this.lastSeq });
+    // A failed connect or a broken socket always ends in `close`, which handles the retry.
+    // The handler must exist anyway: Node's ws throws an 'error' event nobody listens to.
+    socket.onerror = () => {};
     socket.onmessage = (e: MessageEvent) => {
       // A socket we've stopped or replaced can still deliver a few messages while closing.
       if (this.socket !== socket || typeof e.data !== 'string') return;
+      this.lastReceivedAt = performance.now();
       const parsed = parseServerMessage(e.data);
       if (!parsed.ok) {
         console.error(`sync: ignoring invalid server message (${parsed.error})`);
@@ -198,6 +229,11 @@ export class SyncClient {
         return;
       }
       // Anything else (network drop, server restart): keep every unacked op and try again.
+      if (this.isOffline()) {
+        // No network at all: wait for the browser's `online` event instead of retrying blind.
+        this.setStatus('offline');
+        return;
+      }
       this.setStatus('reconnecting');
       // A graceful restart (1012) means "come straight back"; jitter spreads a whole board's
       // worth of clients over half a second instead of all at once.
@@ -220,10 +256,18 @@ export class SyncClient {
         // Duplicates are harmless: the server acks a known opId without applying it twice.
         this.outbox = [...this.pending.values(), ...this.outbox];
         this.pending.clear();
-        // The server's board replaces ours, then our unacked edits go back on top: they're
-        // still ours and will reach the server shortly (LWW decides exactly as it will there).
-        this.store.loadSnapshot(msg.snapshot);
-        this.store.reapply(this.outbox);
+        if (msg.ops) {
+          // Catch-up (algorithms.md §12b): the server sent only what we missed since lastSeq.
+          // Our board, including our own unacked edits, stays as it is; LWW merges the rest.
+          this.store.receive(msg.ops);
+          this.lastWelcome = { kind: 'ops', ops: msg.ops.length };
+        } else {
+          // A full snapshot (first join, or too far behind): it replaces our board, then our
+          // unacked edits go back on top. They're still ours and reach the server shortly.
+          this.store.loadSnapshot(msg.snapshot);
+          this.store.reapply(this.outbox);
+          this.lastWelcome = { kind: 'snapshot', ops: 0 };
+        }
         this.lastSeq = msg.seq;
         this.welcomed = true;
         this.attempts = 0;
@@ -231,6 +275,7 @@ export class SyncClient {
         this.options.presence?.reset(msg.you, msg.peers);
         // Re-announce my selection to the (possibly new) room.
         if (this.lastSelection) this.send({ t: 'select', ids: this.lastSelection.split(',') });
+        if (this.typingIn) this.send({ t: 'typing', id: this.typingIn });
         this.setStatus('connected');
         this.events.emit('welcome', undefined);
         this.flush();
@@ -274,10 +319,45 @@ export class SyncClient {
       case 'select':
         this.options.presence?.select(msg.peerId, msg.ids);
         return;
+      case 'typing':
+        this.options.presence?.typing(msg.peerId, msg.id);
+        return;
+      case 'pong':
+        return; // receipt alone (lastReceivedAt) is the point
       case 'error':
         console.error(`sync: server error ${msg.code}: ${msg.message}`);
         return; // the server closes the socket next; onclose updates the status
     }
+  }
+
+  private isOffline(): boolean {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+  }
+
+  /**
+   * Browser network events: going offline closes the socket right away (instead of waiting for
+   * a timeout) so edits pile up as pending; coming back online reconnects immediately, and the
+   * hello's lastSeq gets us caught up. Not in Node (tests), which has no such events.
+   */
+  private watchNetwork(): void {
+    if (typeof window === 'undefined' || this.offlineListeners) return;
+    const offline = () => {
+      this.setStatus('offline');
+      this.socket?.close();
+    };
+    const online = () => {
+      if (this.stopped || this.welcomed || (this.socket && this.socket.readyState === this.socket.CONNECTING)) return;
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.attempts = 0;
+      this.open();
+    };
+    window.addEventListener('offline', offline);
+    window.addEventListener('online', online);
+    this.offlineListeners = () => {
+      window.removeEventListener('offline', offline);
+      window.removeEventListener('online', online);
+    };
   }
 
   private scheduleFlush(): void {

@@ -5,6 +5,7 @@ const LABELS: Record<ConnectionStatus, string> = {
   connecting: 'Connecting…',
   connected: 'Connected',
   reconnecting: 'Reconnecting…',
+  offline: 'Offline: edits will sync when you reconnect',
   disconnected: 'Disconnected',
 };
 

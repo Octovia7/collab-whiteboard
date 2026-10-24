@@ -22,6 +22,7 @@ import type {
   ShapeId,
   ShapeProps,
   SnapshotShape,
+  Stamp,
   UpdateOp,
 } from '@whiteboard/shared';
 import { QuadTree } from '../canvas/QuadTree';
@@ -42,6 +43,8 @@ export interface BoardStoreEvents extends Record<string, unknown> {
    * (milestone 7) records them. One batch = one user action.
    */
   submit: { ops: Op[] };
+  /** Same batch, just before it is applied: lets undo history read the values being replaced. */
+  beforeSubmit: { ops: Op[] };
 }
 
 /**
@@ -82,6 +85,7 @@ export class BoardStore {
   /** The single path for local edits: applies the batch now (optimistic) and announces it. */
   submit(ops: Op[]): void {
     if (ops.length === 0) return;
+    this.events.emit('beforeSubmit', { ops });
     // Local ops were stamped by this clock already, so no observe() here.
     this.applyAll(ops, 'local');
     this.events.emit('submit', { ops });
@@ -148,6 +152,16 @@ export class BoardStore {
   }
 
   // ---- reads ----
+
+  /** One property's current value. */
+  prop<K extends keyof ShapeProps>(id: ShapeId, key: K): ShapeProps[K] | undefined {
+    return this.board.prop(id, key);
+  }
+
+  /** Who last wrote this property; undo skips properties someone else wrote since. */
+  propStamp(id: ShapeId, key: keyof ShapeProps): Stamp | undefined {
+    return this.board.propStamp(id, key);
+  }
 
   get(id: ShapeId): Shape | undefined {
     return this.board.get(id);

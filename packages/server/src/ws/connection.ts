@@ -116,9 +116,10 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
         if (room || joining) return fail('bad_message', 'hello sent twice');
         if (msg.boardId !== boardId) return fail('bad_message', 'hello is for a different board than the URL');
         joining = true;
-        // lastSeq catch-up arrives in milestone 7; for now every join gets the full snapshot.
+        // A client that has the board up to lastSeq gets only the ops after it (if the room
+        // still has them all); otherwise the full snapshot.
         rooms
-          .join(boardId, peer)
+          .join(boardId, peer, msg.lastSeq)
           .then((r) => {
             room = r;
             // The socket may have closed while the board was loading.
@@ -134,13 +135,16 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
         return enqueueOps(room, msg.ops);
       case 'cursor':
       case 'select':
+      case 'typing':
         // Presence before the room is ready has nowhere to go; the next update will.
         if (!room) return;
         metrics.presenceMessages.inc({ type: msg.t });
         room.relayPresence(peer, msg);
         return;
       case 'ping':
-        return; // only refreshes lastSeen (above)
+        // lastSeen was refreshed above; the pong lets the client tell a dead connection from a quiet one.
+        peer.send({ t: 'pong' });
+        return;
     }
   });
 

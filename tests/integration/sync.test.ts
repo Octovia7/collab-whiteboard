@@ -142,6 +142,7 @@ describe('sync through the real server', () => {
       JSON.stringify({ t: 'ping' }),
       JSON.stringify({ t: 'ops', ops: [{ kind: 'update', opId: 'x', stamp: { t: 1, client: 'c' }, id: 'c-1', props: { x: 1 } }] }),
     ]);
-    expect(early.messages).toEqual([expect.objectContaining({ t: 'error', code: 'hello_first' })]);
+    // The ping is answered with a pong; then the early ops get the error.
+    expect(early.messages.filter((m) => m.t !== 'pong')).toEqual([expect.objectContaining({ t: 'error', code: 'hello_first' })]);
   });
 });

@@ -15,7 +15,7 @@ import type { Repo } from './repo';
  * every op <= S), and only then write it.
  *
  * One snapshot per room at a time via an in-process flag; with several servers this becomes
- * the Redis lock `snap-lock:{boardId}` (milestone 8). Tombstone GC is deferred to milestone 7.
+ * the Redis lock `snap-lock:{boardId}` (milestone 8).
  */
 export class Snapshotter {
   constructor(
@@ -25,6 +25,9 @@ export class Snapshotter {
     private readonly everyOps: number,
     private readonly everyMs: number,
     private readonly metrics?: Metrics,
+    /** Tombstones whose delete committed longer ago than this are removed at snapshot time. */
+    private readonly tombstoneTtlMs = 24 * 60 * 60 * 1000,
+    private readonly now: () => number = Date.now,
   ) {}
 
   /** Called by the room after it accepts ops. */
@@ -50,6 +53,12 @@ export class Snapshotter {
     s.running = true;
     const started = performance.now();
     try {
+      // Tombstone GC (algorithms.md §4), before capturing, so the snapshot no longer has them.
+      const collected = room.collectTombstones(this.now() - this.tombstoneTtlMs);
+      if (collected > 0) {
+        this.metrics?.tombstonesCollected.inc(collected);
+        this.log.info({ boardId: room.boardId, collected }, 'tombstones collected');
+      }
       const seq = room.currentSeq;
       const state = room.persistentState();
       const covered = s.opsSince;
@@ -57,6 +66,7 @@ export class Snapshotter {
       // Keep the ops between the previous snapshot and this one (useful for catch-up from a
       // recent lastSeq); everything older is covered twice over and can go. One transaction.
       await this.repo.writeSnapshotAndPrune(room.boardId, seq, state, state.board.shapes.length, s.previousSeq);
+      room.trimLog(s.previousSeq); // the catch-up log mirrors what Postgres still has
       s.previousSeq = s.lastSeq;
       s.lastSeq = seq;
       s.opsSince = Math.max(0, s.opsSince - covered);

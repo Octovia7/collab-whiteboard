@@ -68,12 +68,21 @@ export class RoomManager {
     return this.rooms.get(boardId);
   }
 
-  async join(boardId: string, peer: Peer): Promise<Room> {
+  async join(boardId: string, peer: Peer, lastSeq = 0): Promise<Room> {
     const room = await this.get(boardId);
     const timer = this.unloadTimers.get(boardId);
     if (timer) clearTimeout(timer);
     this.unloadTimers.delete(boardId);
-    peer.send(room.join(peer));
+    const welcome = room.join(peer, lastSeq);
+    if (welcome.t === 'welcome') {
+      if (welcome.ops) {
+        this.deps.metrics?.catchupOps.observe(welcome.ops.length);
+        this.deps.metrics?.welcomes.inc({ kind: 'catchup' });
+      } else {
+        this.deps.metrics?.welcomes.inc({ kind: 'snapshot' });
+      }
+    }
+    peer.send(welcome);
     return room;
   }
 

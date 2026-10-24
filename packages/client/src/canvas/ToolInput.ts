@@ -28,6 +28,7 @@ export class ToolInput {
     el.addEventListener('pointerup', this.onPointerUp);
     el.addEventListener('pointercancel', this.onPointerCancel);
     el.addEventListener('pointerleave', this.onPointerLeave);
+    el.addEventListener('dblclick', this.onDoubleClick);
     window.addEventListener('keydown', this.onKeyDown);
     const offTool = this.tools.events.on('change', () => this.panZoom.setBaseCursor(this.tools.cursor));
     this.panZoom.setBaseCursor(this.tools.cursor);
@@ -37,6 +38,7 @@ export class ToolInput {
       el.removeEventListener('pointerup', this.onPointerUp);
       el.removeEventListener('pointercancel', this.onPointerCancel);
       el.removeEventListener('pointerleave', this.onPointerLeave);
+      el.removeEventListener('dblclick', this.onDoubleClick);
       window.removeEventListener('keydown', this.onKeyDown);
       offTool();
     };
@@ -60,6 +62,12 @@ export class ToolInput {
     this.onCursor(p);
     if (this.activePointer === null) this.tools.pointerHover(p);
     else if (e.pointerId === this.activePointer) this.tools.pointerMove(p, e);
+  };
+
+  private onDoubleClick = (e: MouseEvent) => {
+    if (e.button !== 0 || this.panZoom.spaceHeld) return;
+    const rect = this.el.getBoundingClientRect();
+    this.tools.doubleClick(this.camera.toWorld(e.clientX - rect.left, e.clientY - rect.top));
   };
 
   private onPointerLeave = () => {

@@ -7,6 +7,8 @@ export interface StoredOp {
   /** From the socket, never from the client (CLAUDE.md conventions). */
   userId: string;
   op: Op;
+  /** Commit time, when read back from board_ops.created_at (tombstone ages). */
+  createdAt?: Date;
 }
 
 /**

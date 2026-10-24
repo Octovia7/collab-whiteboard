@@ -89,7 +89,7 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
   const redis = connectRedis(config.redisUrl, app.log);
   const repo = new Repo(database.db);
   const writer = new OpWriter(repo, app.log, config.faults.commitDelayMs);
-  const snapshotter = new Snapshotter(repo, writer, app.log, config.snapshotEveryOps, config.snapshotEveryMs, metrics);
+  const snapshotter = new Snapshotter(repo, writer, app.log, config.snapshotEveryOps, config.snapshotEveryMs, metrics, config.tombstoneTtlMs);
   const rooms = new RoomManager({
     repo,
     store: writer,

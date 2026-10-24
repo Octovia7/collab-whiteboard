@@ -29,6 +29,8 @@ export interface RemotePeer extends PeerInfo {
   target: { x: number; y: number } | null;
   lastMoved: number;
   selection: string[];
+  /** The note this peer is editing right now, if any (the soft lock). */
+  typing: string | null;
 }
 
 export interface OnlineUser {
@@ -91,6 +93,23 @@ export class Presence {
     this.events.emit('moved', undefined);
   }
 
+  typing(peerId: string, noteId: string | null): void {
+    const p = this.peers.get(peerId);
+    if (!p || p.typing === noteId) return;
+    p.typing = noteId;
+    this.events.emit('moved', undefined);
+  }
+
+  /**
+   * Someone else editing this note, if anyone: the note is soft-locked for us (algorithms.md
+   * §13). A soft lock, not a guarantee: two people can still start in the same instant, and
+   * LWW on the whole text then keeps the later save.
+   */
+  typingIn(noteId: string): RemotePeer | undefined {
+    for (const p of this.peers.values()) if (p.typing === noteId) return p;
+    return undefined;
+  }
+
   /** Remote peers with a visible cursor or selection, for drawing. */
   visible(): RemotePeer[] {
     const now = this.now();
@@ -128,7 +147,7 @@ export class Presence {
   }
 
   private add(peer: PeerInfo): void {
-    this.peers.set(peer.peerId, { ...peer, color: colorFor(peer.userId), cursor: null, target: null, lastMoved: 0, selection: [] });
+    this.peers.set(peer.peerId, { ...peer, color: colorFor(peer.userId), cursor: null, target: null, lastMoved: 0, selection: [], typing: null });
   }
 
   private changed(): void {
