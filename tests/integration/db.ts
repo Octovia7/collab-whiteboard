@@ -1,8 +1,32 @@
+import { Redis } from 'ioredis';
 import pg from 'pg';
 
 /** Docker Postgres from docker-compose.yml (host port 55432; see the comment there). */
 export const ADMIN_URL = 'postgres://whiteboard:whiteboard@127.0.0.1:55432/postgres';
 export const dbUrl = (name: string) => `postgres://whiteboard:whiteboard@127.0.0.1:55432/${name}`;
+
+/**
+ * Docker Redis (host port 56379). Each suite gets its own logical database, like Postgres:
+ * 0 is development, 1 integration tests, 2 E2E, so seq counters, rate limits and revoked
+ * sessions never leak between them.
+ */
+export const TEST_REDIS_URL = 'redis://127.0.0.1:56379/1';
+export const E2E_REDIS_URL = 'redis://127.0.0.1:56379/2';
+
+/** Empties a test Redis database. Refuses anything but the two test databases. */
+export async function flushRedis(url: string): Promise<void> {
+  if (url !== TEST_REDIS_URL && url !== E2E_REDIS_URL) throw new Error(`refusing to flush ${url}`);
+  const redis = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 5_000 });
+  redis.on('error', () => {});
+  try {
+    await redis.connect();
+    await redis.flushdb();
+  } catch (err) {
+    throw new Error(`Redis not reachable on 127.0.0.1:56379. Run \`docker compose up -d\`. (${(err as Error).message})`);
+  } finally {
+    redis.disconnect();
+  }
+}
 
 /** Creates the database if needed. Refuses to manage anything but the two test databases. */
 export async function ensureDatabase(name: string): Promise<void> {

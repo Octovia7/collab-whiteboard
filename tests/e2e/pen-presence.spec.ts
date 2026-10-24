@@ -117,7 +117,8 @@ test('strokes can be selected, moved and recolored but not resized', async ({ br
   await expect.poll(async () => (await shapeById(b, stroke.id))?.x).toBeCloseTo(stroke.x + 80, 1);
   // Moving only changed x/y: the relative points are untouched.
   expect(await strokePoints(b, stroke.id)).toEqual(pointsBefore);
-  expect((await shapeById(b, stroke.id))?.color).toBe('#1971c2');
+  // The recolor goes out in a later batch than the move, so wait for it too.
+  await expect.poll(async () => (await shapeById(b, stroke.id))?.color).toBe('#1971c2');
   await expectConverged([a, b]);
 });
 

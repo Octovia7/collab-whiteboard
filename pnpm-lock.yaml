@@ -29,6 +29,9 @@ importers:
       eslint:
         specifier: ^9.39.5
         version: 9.39.5
+      ioredis:
+        specifier: ^5.11.1
+        version: 5.11.1
       pg:
         specifier: ^8.23.1
         version: 8.23.1

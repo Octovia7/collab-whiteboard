@@ -9,7 +9,7 @@ import { Presence } from '../../packages/client/src/store/Presence';
 import { SyncClient } from '../../packages/client/src/sync/SyncClient';
 import type { SyncOptions } from '../../packages/client/src/sync/SyncClient';
 import type { Op } from '@whiteboard/shared';
-import { dbUrl, truncateAll } from './db';
+import { TEST_REDIS_URL, dbUrl, flushRedis, truncateAll } from './db';
 
 export const DB_URL = dbUrl('whiteboard_test');
 export const ORIGIN = 'http://test.local';
@@ -25,6 +25,7 @@ export async function startServer(env: Record<string, string> = {}, port = 0, op
   const config = loadConfig({
     NODE_ENV: 'test',
     DATABASE_URL: DB_URL,
+    REDIS_URL: TEST_REDIS_URL,
     LOG_LEVEL: 'silent',
     BCRYPT_COST: '4', // fast hashing in tests; production uses 12
     AUTH_RATE_LIMIT_PER_MIN: '1000', // tests sign up many users from one IP; the limit has its own test
@@ -37,7 +38,10 @@ export async function startServer(env: Record<string, string> = {}, port = 0, op
   return { ...built, port: actual, base: `http://127.0.0.1:${actual}`, close: () => built.app.close() };
 }
 
-export const resetDb = () => truncateAll(DB_URL);
+export const resetDb = async () => {
+  await truncateAll(DB_URL);
+  await flushRedis(TEST_REDIS_URL);
+};
 
 /** Signs up a user and returns its session cookie. */
 export async function signUp(server: TestServer, email: string) {

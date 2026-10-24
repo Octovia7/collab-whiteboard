@@ -10,7 +10,8 @@
     "test:convergence": "vitest run --config vitest.convergence.config.ts",
     "typecheck": "tsc -p tsconfig.json && pnpm -r typecheck",
     "lint": "eslint .",
-    "test:e2e": "playwright test",
+    "build:e2e": "pnpm -F @whiteboard/server build && pnpm -F @whiteboard/client exec vite build --mode e2e",
+    "test:e2e": "pnpm build:e2e && playwright test",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:smoke": "playwright test --config playwright.smoke.config.ts"
   },
@@ -22,6 +23,7 @@
     "@types/ws": "^8.18.2",
     "@whiteboard/shared": "workspace:*",
     "eslint": "^9.39.5",
+    "ioredis": "^5.11.1",
     "pg": "^8.23.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.72.0",
