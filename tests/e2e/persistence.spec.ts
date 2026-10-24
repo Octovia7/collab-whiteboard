@@ -169,13 +169,18 @@ test.describe('3. a crash between sending an edit and its ack loses nothing and 
   });
 
   test('killed after the commit, before the ack: the resend is not stored twice', async ({ browser }) => {
-    await restartServer({ WB_FAULT_ACK_DELAY_MS: '5000' });
+    // Acks held for 30 s: the test kills the server long before any goes out, even on a slow machine.
+    await restartServer({ WB_FAULT_ACK_DELAY_MS: '30000' });
     const t = await openTabs(browser, 1);
     const a = t.page(0);
     const ellipse = await drawShape(a, 'Ellipse', { x: 300, y: 250 }, { x: 460, y: 360 });
-    // Committed (in Postgres) but not acked.
+    // Every op the tab sent (the create and the drag's updates) committed in Postgres, none acked
+    // yet. Waiting for all of them, not just the create: a drag update still in flight would be
+    // stored a moment later and look like a duplicate.
     await expect.poll(async () => (await opRows(t.boardId)).some((r) => r.shape_id === ellipse.id)).toBe(true);
-    await expect.poll(() => unacked(a)).toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await unacked(a)) > 0 && (await opRows(t.boardId)).length === (await unacked(a)), { timeout: 15_000 })
+      .toBe(true);
     const committed = (await opRows(t.boardId)).map((r) => r.op_id).sort();
 
     await killServer();
