@@ -543,6 +543,14 @@ if (shape[prop].stamp.client !== clientId) continue;   // someone else changed i
 
 **Group actions into one undo step.** A drag fires dozens of updates, but the user thinks of it as one move. Record one entry at pointer-up with the start position as the inverse. Same for "paste 20 shapes": one entry.
 
+**How it's built here** (`packages/client/src/store/History.ts`):
+
+- Every local batch passes through `BoardStore.submit`, which emits `beforeSubmit` just before applying it. History reads each changed property's current value there. That value is the inverse.
+- A pointer gesture is a transaction (`begin` at pointer-down, `commit` at pointer-up), so only the first value before the gesture and the last value after it are kept, however many moves happened. A submit outside a gesture (Delete key, recolor) is its own step; an empty step (a click) is dropped.
+- A shape created in the step is undone with `deleted: true` and redone with `deleted: false`; its other changes in the same step need no inverse. A never-deleted shape has no `deleted` register: its prior value counts as `false`.
+- The skip rule compares the property's current stamp with this tab's `clientId`. If every property of a step was overwritten by others, that step is skipped and undo moves on to the next one.
+- Undo and redo submit with fresh stamps but are not recorded as new steps. 100 steps per tab.
+
 **Interview point:** "Undo is per-user and implemented as inverse operations re-stamped as new writes, so it propagates through the same LWW path. Properties overwritten by others since are skipped to avoid clobbering their work."
 
 ## 10. Camera: pan and zoom maths
@@ -745,7 +753,7 @@ At most 500 ops are replayed, so load time stays flat however old the board is.
 
 Each client remembers `lastSeq`, the highest server sequence it has applied.
 
-**Short disconnect (Wi-Fi blip):** on reconnect, send `hello { boardId, lastSeq }`. The server replies with every op where `seq > lastSeq`. The client applies them, then resends its pending queue.
+**Short disconnect (Wi-Fi blip):** on reconnect, send `hello { boardId, lastSeq }`. The server replies with every op where `seq > lastSeq`. The client applies them, then resends its pending queue. The server can answer from memory: each room keeps the ops since its previous snapshot (the range Postgres still holds), and clients from before that, or from before a tombstone GC, get a snapshot instead.
 
 **Long offline session:** the user keeps drawing; ops pile up in the pending queue, saved to IndexedDB so a closed tab doesn't lose them (stretch goal). On reconnect, the same `hello` + resend happens. Every op carries its Lamport stamp, so LWW merges everything correctly with no special merge logic. This is the payoff of the design.
 
@@ -792,7 +800,7 @@ Build sections 1–11 fully and the simple versions of section 12.
 | Text CRDT inside sticky notes | Skip: use LWW on the whole text field | below |
 | Images, export to PNG | Skip unless time is left | |
 
-**Text inside sticky notes.** With LWW on the `text` property, if two people type in the same note at the same moment, one person's text replaces the other's. For v1, reduce how often that happens: while someone is editing a note, broadcast it through presence ("Priya is typing") and show the note as locked for others. That's a soft lock, not a guarantee, and it's honest to say so in interviews. A text CRDT for notes is the natural "next step" answer.
+**Text inside sticky notes.** With LWW on the `text` property, if two people type in the same note at the same moment, one person's text replaces the other's. For v1, reduce how often that happens: while someone is editing a note, broadcast it through presence ("Priya is typing") and show the note as locked for others. That's a soft lock, not a guarantee, and it's honest to say so in interviews. A text CRDT for notes is the natural "next step" answer. Here: the client sends presence `typing { id }` when its editor opens on a note and `typing { id: null }` when it closes; other tabs outline the note in that person's color with "Name is typing…" and refuse to open their own editor on it. The text is saved once, on blur, as one LWW update of the whole `text`.
 
 **What "done" looks like**
 

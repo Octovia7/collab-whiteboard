@@ -80,9 +80,7 @@ This is a production system, not a demo. These standards are part of each milest
 
 | Limitation | Removed in |
 | --- | --- |
-| No `lastSeq` catch-up: every (re)connect gets a full snapshot; `catchup_ops` metric not emitted yet | M7 |
-| Tombstones are never garbage-collected (age = `board_ops.created_at` of the delete op) | M7 |
-| Undo/redo, sticky notes | M7 |
+| Offline edits live only in memory: closing or reloading the tab while offline loses them (no IndexedDB queue) | Stretch goal (IndexedDB offline queue) |
 | Rate limits, socket caps, the snapshot lock and presence (online list, cursors) are per server process (in memory); seq is assigned in memory | M8 (Redis: `rl:ws:*`, `INCR seq`, `snap-lock`, `presence:*` pub/sub, `online:*` hash) |
 | Single server only: no pub/sub between servers, no gap detection | M8 |
 | No share links; members are added by email only | M8 |
@@ -134,7 +132,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Server rooms + WebSocket sync (pending queue, acks, broadcast)
 - [x] Postgres persistence, snapshots, auth, roles
 - [x] Pen tool (streaming, RDP, smoothing), eraser, presence
-- [ ] Undo/redo, sticky notes, reconnect + catch-up
+- [x] Undo/redo, sticky notes, reconnect + catch-up
 - [ ] Redis pub/sub multi-server, sharing, rate limits
 - [ ] E2E, chaos and load tests
 - [ ] Deploy, README, demo video
@@ -209,3 +207,15 @@ whole-stroke eraser (8 px, swept between pointer events), strokes selectable/mov
 send, eased 30%/frame, colored by a hash of the user id, hidden after 30 s idle; heartbeat every 5 s, peers silent for
 15 s are terminated (PRESENCE_TIMEOUT_MS / PRESENCE_SWEEP_MS). Toolbar is left-anchored; header (title, online list,
 user) top right. Shortcuts P (pen), E (eraser).
+
+Milestone 7 done and merged: per-tab undo/redo (`client/src/store/History.ts`, 100 steps; a pointer gesture = one step;
+a property whose current stamp isn't this tab's is skipped; Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, Undo/Redo buttons bottom
+left). Sticky notes (`note` type, N; double-click to edit; textarea over the note; text saved once on blur as one LWW
+update; presence `typing` soft-locks the note in other tabs with "Name is typing…"). Catch-up: each room keeps the ops
+since its previous snapshot in memory; `hello.lastSeq` inside that log gets `welcome { ops }`, otherwise (first join,
+too far behind, ahead of the server, or a tombstone GC after lastSeq) `welcome { snapshot }`; pending ops are resent
+either way. Clients close the socket on the browser `offline` event ("Offline" badge), reconnect on `online`, and treat
+3 silent heartbeats as a dead socket (server answers `ping` with `pong`). Tombstone GC at snapshot time for tombstones
+older than `TOMBSTONE_TTL_MS` (default 24 h; age from `board_ops.created_at`, carried in the snapshot as `deletedAt`).
+Metrics `catchup_ops`, `welcomes_total{kind}`, `tombstones_collected_total`. The IndexedDB offline queue was not built
+(stretch goal, see Known limitations).

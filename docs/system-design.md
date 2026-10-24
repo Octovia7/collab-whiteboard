@@ -199,7 +199,8 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 | `ops` | `ops: Op[]` (each with `opId`, `stamp`) | A batch of create / update / delete / append ops |
 | `cursor` | `x, y` (world) | Pointer position, max 20/s |
 | `select` | `ids: string[]` | Current selection |
-| `ping` | | Heartbeat every 5 s when idle |
+| `typing` | `id` (a note) or `null` | I'm editing this note's text: others show "… is typing" and soft-lock it |
+| `ping` | | Heartbeat every 5 s when idle (or when the server has been quiet); answered with `pong` |
 
 **Server → client**
 
@@ -212,6 +213,8 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 | `peer-join` / `peer-leave` | `peer { peerId, userId, name }` / `peerId` | Online list changes |
 | `cursor` / `select` | `peerId, …` | Other users' presence |
 | `role` | `role` | Your role on this board changed (owner changed it over REST). Applies to your next batch; no reconnect |
+| `typing` | `peerId, id` | Another peer started (`id`) or stopped (`null`) editing a note |
+| `pong` | | Reply to `ping`. A client that hears nothing at all for three heartbeats treats the socket as dead and reconnects |
 | `error` | `code, message` | e.g. `forbidden`, `board_not_found`; socket then closes |
 
 **Op shape** (defined in `shared/types.ts`):
@@ -224,6 +227,8 @@ type Op =
 // delete = update { deleted: true }
 // append: `chunk` is the author's per-stroke chunk number (0, 1, 2...); see algorithms.md §7a
 ```
+
+**Catch-up on reconnect.** `hello` carries the highest `seq` the client has applied. Each room keeps the ops after its previous snapshot in memory (the same range Postgres still has). If that log covers `lastSeq`, `welcome` carries `ops` (only what was missed, applied on top of the client's existing board, then the client resends its pending ops); otherwise `welcome` carries a full `snapshot`, onto which the client reapplies its pending ops. A snapshot is also sent on a first join (`lastSeq = 0`), when `lastSeq` is ahead of the server, and when tombstones were garbage-collected after `lastSeq` (the client may still hold one no op will ever mention again). Browsers close the socket on the `offline` event and reconnect on `online`.
 
 **Presence identity.** Presence is per connection, not per user: every socket gets a server-assigned `peerId`, sent with its `userId` and display name. The same person with two tabs open shows two cursors (one per tab), while online lists group entries by `userId`, so they appear once. Peers are dropped when their socket closes or after 15 s without any message (clients send `ping` every 5 s when idle).
 
@@ -271,7 +276,7 @@ Waiting for the commit before acking (step 6 → 7) is what makes "no acknowledg
 - Triggered every 500 ops or 60 s of activity per board, and when a room unloads.
 - Takes a Redis lock `snap-lock:{boardId}` (`SET NX EX 30`) so only one server snapshots a board at a time.
 - Writes `board_snapshots(board_id, seq, state)` and deletes ops older than the previous snapshot to cap table growth.
-- Tombstone GC (milestone 7): drops tombstones older than 24 h. A tombstone's age is the server's commit time of the op that set `deleted: true` (`board_ops.created_at`), so `shared` never needs wall-clock time.
+- Tombstone GC: drops tombstones older than `TOMBSTONE_TTL_MS` (24 h by default). A tombstone's age is the server's commit time of the op that set `deleted: true` (`board_ops.created_at`), so `shared` never needs wall-clock time.
 
 **Presence** never touches Postgres. Cursor and select messages are broadcast locally and published on a separate channel `presence:{boardId}`. The online list lives in a Redis hash `online:{boardId}` (userId → lastSeen) so all servers see the same list; a sweep every 5 s removes entries older than 15 s.
 
