@@ -64,22 +64,25 @@ describe('server messages', () => {
   it('parses each type', () => {
     const okS = (m: unknown) => parseServerMessage(JSON.stringify(m)).ok;
     const me = { peerId: 'p1', userId: 'u', name: 'Ada' };
-    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [{ ...me, peerId: 'p2' }], snapshot: { shapes: [] }, seq: 0 })).toBe(true);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [{ ...me, peerId: 'p2' }], snapshot: { shapes: [] }, upTo: 0 })).toBe(true);
     expect(okS({ t: 'peer-join', peer: me })).toBe(true);
     expect(okS({ t: 'peer-leave', peerId: 'p1' })).toBe(true);
     expect(okS({ t: 'cursor', peerId: 'p1', x: 1, y: 2 })).toBe(true);
     expect(okS({ t: 'select', peerId: 'p1', ids: ['a-1'] })).toBe(true);
     expect(okS({ t: 'typing', peerId: 'p1', id: null })).toBe(true);
-    expect(okS({ t: 'ack', opIds: ['a:1'], seq: 3 })).toBe(true);
+    expect(okS({ t: 'ack', opIds: ['a:1'], upTo: 3 })).toBe(true);
+    expect(okS({ t: 'saving', paused: true })).toBe(true);
+    expect(okS({ t: 'saving' })).toBe(false);
+    expect(okS({ t: 'ack', opIds: ['a:1'], seq: 3 })).toBe(false); // seq was renamed upTo
     expect(okS({ t: 'reject', opId: 'a:1', reason: 'unknown_shape', shape: null })).toBe(true);
     expect(okS({ t: 'error', code: 'bad_message', message: 'x' })).toBe(true);
     expect(okS({ t: 'role', role: 'viewer' })).toBe(true);
     expect(okS({ t: 'role', role: 'admin' })).toBe(false);
-    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], snapshot: null, seq: 0 })).toBe(false);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], snapshot: null, upTo: 0 })).toBe(false);
     // Catch-up form, and never both or neither.
-    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], ops: [], seq: 7 })).toBe(true);
-    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], ops: [], snapshot: { shapes: [] }, seq: 7 })).toBe(false);
-    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], seq: 7 })).toBe(false);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], ops: [], upTo: 7 })).toBe(true);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], ops: [], snapshot: { shapes: [] }, upTo: 7 })).toBe(false);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], upTo: 7 })).toBe(false);
     expect(okS({ t: 'pong' })).toBe(true);
   });
 });

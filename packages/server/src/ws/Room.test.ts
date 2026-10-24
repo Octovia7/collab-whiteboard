@@ -46,13 +46,13 @@ const append = (id: string, t: number): Op => ({ kind: 'append', opId: `op-a-${t
 const kinds = (inbox: ServerMessage[]) => inbox.map((m) => m.t);
 
 describe('Room', () => {
-  it('welcomes with the current board and seq', async () => {
+  it('welcomes with the current board and watermark', async () => {
     const room = new Room('b', new MemoryOpStore());
     const a = peer('ua');
     room.join(a);
     await room.handleOps(a, [create('c-1', 1)]);
     const welcome = room.join(peer('ub'));
-    expect(welcome).toMatchObject({ t: 'welcome', seq: 1, role: 'editor', you: { userId: 'ub' } });
+    expect(welcome).toMatchObject({ t: 'welcome', upTo: 1, role: 'editor', you: { userId: 'ub' } });
     expect(welcome.t === 'welcome' && welcome.snapshot?.shapes.map((s) => s.id)).toEqual(['c-1']);
   });
 
@@ -64,8 +64,8 @@ describe('Room', () => {
     room.join(a);
     room.join(b);
     await room.handleOps(a, [create('c-1', 1), update('c-1', 2, 5)]);
-    expect(b.inbox).toEqual([{ t: 'ops', ops: [create('c-1', 1), update('c-1', 2, 5)], seq: 2 }]);
-    expect(a.inbox).toEqual([{ t: 'ack', opIds: ['op-c-1-1', 'op-u-2'], seq: 2 }]);
+    expect(b.inbox).toEqual([{ t: 'ops', ops: [create('c-1', 1), update('c-1', 2, 5)], upTo: 2 }]);
+    expect(a.inbox).toEqual([{ t: 'ack', opIds: ['op-c-1-1', 'op-u-2'], upTo: 2 }]);
     expect(store.ops.map((o) => [o.seq, o.userId])).toEqual([
       [1, 'ua'],
       [2, 'ua'],
@@ -74,22 +74,21 @@ describe('Room', () => {
 
   it('broadcasts before the commit but acks only after it (rule 8)', async () => {
     let commit: () => void = () => {};
-    const slowStore: OpStore = { append: (_ops: StoredOp[]) => new Promise<void>((r) => (commit = r)) };
+    const slowStore: OpStore = { append: (_ops: StoredOp[]) => new Promise<string[]>((r) => (commit = () => r([]))) };
     const room = new Room('b', slowStore);
     const a = peer('ua');
     const b = peer('ub');
     room.join(a);
     room.join(b);
-    const done = room.handleOps(a, [create('c-1', 1)]);
-    await Promise.resolve();
+    const { acked } = await room.receive(a, [create('c-1', 1)]); // resolves once applied
     expect(kinds(b.inbox)).toEqual(['ops']); // peers already have it
     expect(a.inbox).toEqual([]); // sender not acked yet
     commit();
-    await done;
+    await acked;
     expect(kinds(a.inbox)).toEqual(['ack']);
   });
 
-  it('a resent op is acked with its original seq, not stored or broadcast twice', async () => {
+  it('a resent op is acked again, not stored or broadcast twice', async () => {
     const store = new MemoryOpStore();
     const room = new Room('b', store);
     const a = peer('ua');
@@ -101,7 +100,7 @@ describe('Room', () => {
     a.inbox.length = 0;
     b.inbox.length = 0;
     await room.handleOps(a, [create('c-1', 1)]);
-    expect(a.inbox).toEqual([{ t: 'ack', opIds: ['op-c-1-1'], seq: 1 }]);
+    expect(a.inbox).toEqual([{ t: 'ack', opIds: ['op-c-1-1'], upTo: 2 }]);
     expect(b.inbox).toEqual([]);
     expect(store.ops).toHaveLength(2);
   });
@@ -115,7 +114,10 @@ describe('Room', () => {
       { t: 'reject', opId: 'op-u-2', reason: 'unknown_shape', shape: null },
       { t: 'reject', opId: 'op-a-3', reason: 'unknown_shape', shape: null },
     ]);
-    expect(room.currentSeq).toBe(0);
+    expect(room.snapshot().shapes).toEqual([]);
+    // Ops are validated after their seqs are reserved; a rejected op's seq is skipped, so the
+    // watermark still moves past it instead of waiting for an op that will never come.
+    expect(room.upTo).toBe(2);
   });
 
   it('only the stroke creator may append, and only to strokes', async () => {
@@ -132,7 +134,7 @@ describe('Room', () => {
     await room.handleOps(a, [append('r-1', 4), append('k-1', 5)]);
     expect(a.inbox).toEqual([
       expect.objectContaining({ t: 'reject', opId: 'op-a-4', reason: 'not_a_stroke' }),
-      { t: 'ack', opIds: ['op-a-5'], seq: 3 },
+      { t: 'ack', opIds: ['op-a-5'], upTo: 5 }, // seqs 3 and 4 went to rejected ops
     ]);
   });
 
@@ -157,7 +159,7 @@ describe('Room', () => {
     a.inbox.length = 0;
     await room.handleOps(a, [update('c-1', 2, 5)]);
     expect(a.inbox).toEqual([expect.objectContaining({ t: 'reject', reason: 'forbidden' })]);
-    expect(room.currentSeq).toBe(1);
+    expect(room.upTo).toBe(1);
   });
 });
 
@@ -168,26 +170,26 @@ describe('Room: persistence and membership', () => {
     const a = peer('ua');
     live.join(a);
     await live.handleOps(a, [create('k-1', 1, 'stroke'), create('r-1', 2)]);
-    const snapshot = { seq: live.currentSeq, state: live.persistentState() };
+    const snapshot = { seq: live.upTo, state: live.persistentState() };
     await live.handleOps(a, [update('r-1', 3, 9)]);
 
     const restored = new Room('b', new MemoryOpStore());
     restored.restore(snapshot, store.ops.filter((o) => o.seq > snapshot.seq));
     expect(restored.snapshot()).toEqual(live.snapshot());
-    expect(restored.currentSeq).toBe(3);
+    expect(restored.upTo).toBe(3);
 
     const again = peer('ua');
     restored.join(again);
     // The stroke's creator survived the snapshot, so ua may still append and others may not.
     await restored.handleOps(again, [append('k-1', 4)]);
-    expect(again.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-a-4'], seq: 4 });
+    expect(again.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-a-4'], upTo: 4 });
     const other = peer('ub');
     restored.join(other);
     await restored.handleOps(other, [append('k-1', 5)]);
     expect(other.inbox.at(-1)).toMatchObject({ t: 'reject', reason: 'not_author' });
-    // A tail op resent after the restart is acked with its original seq, not re-stored.
+    // A tail op resent after the restart is acked again, not re-stored.
     await restored.handleOps(again, [update('r-1', 3, 9)]);
-    expect(again.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-u-3'], seq: 3 });
+    expect(again.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-u-3'], upTo: 5 }); // seq 5: ub's rejected append
   });
 
   it('setRole pushes the new role and applies it to the next batch', async () => {
@@ -246,7 +248,7 @@ describe('Room: presence', () => {
     ]);
     expect(a.presence.some((m) => m.t === 'cursor')).toBe(false); // not echoed back
     expect(room.snapshot().shapes).toEqual([]);
-    expect(room.currentSeq).toBe(0);
+    expect(room.upTo).toBe(0);
   });
 
   it('sweep terminates peers silent since before the cutoff', () => {
@@ -273,7 +275,7 @@ describe('Room: catch-up and tombstone GC', () => {
     await room.handleOps(a, [create('c-1', 1), update('c-1', 2, 5), update('c-1', 3, 6)]);
     const back = peer('ua');
     const welcome = room.join(back, 1);
-    expect(welcome).toMatchObject({ t: 'welcome', seq: 3, ops: [update('c-1', 2, 5), update('c-1', 3, 6)] });
+    expect(welcome).toMatchObject({ t: 'welcome', upTo: 3, ops: [update('c-1', 2, 5), update('c-1', 3, 6)] });
     expect(welcome.t === 'welcome' && welcome.snapshot).toBeUndefined();
     expect(room.join(peer('ua'), 3)).toMatchObject({ ops: [] }); // up to date: nothing to send
   });
@@ -339,5 +341,159 @@ describe('Room: catch-up and tombstone GC', () => {
     // a-1 from the snapshot's ages, c-1 from created_at, b-1 (no recorded age) counted from now.
     expect(room.persistentState().deletedAt).toEqual({ 'a-1': 100, 'b-1': 50_000, 'c-1': 300 });
     expect(room.catchUp(3)).toEqual([del('c-1', 4)]);
+  });
+});
+
+describe('Room: several servers (watermark, gaps, resends)', () => {
+  const stored = (seq: number, op: Op, userId = 'ux'): StoredOp => ({ boardId: 'b', seq, opId: op.opId, userId, op });
+  async function until(cond: () => boolean, ms = 2000) {
+    const end = Date.now() + ms;
+    while (!cond()) {
+      if (Date.now() > end) throw new Error('timed out');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+  const lastOps = (p: ReturnType<typeof peer>) => p.inbox.filter((m) => m.t === 'ops').at(-1);
+
+  it('delivers out-of-order ops at once; the watermark waits until the gap is read from Postgres', async () => {
+    const db: StoredOp[] = [];
+    const room = new Room('b', new MemoryOpStore(), {
+      fetchOps: async (after, to) => db.filter((r) => r.seq > after && r.seq <= to),
+      gapPollMs: 10,
+      holeAfterMs: 60_000,
+    });
+    const a = peer('ua');
+    room.join(a);
+    room.receiveRemote('ux', [{ seq: 1, op: create('c-1', 1) }]);
+    room.receiveRemote('ux', [{ seq: 3, op: update('c-1', 3, 9) }]); // seq 2's message was lost
+    expect(lastOps(a)).toEqual({ t: 'ops', ops: [update('c-1', 3, 9)], upTo: 1 }); // delivered now, watermark held
+    expect(room.upTo).toBe(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(room.upTo).toBe(1); // not in Postgres yet: still waiting
+    db.push(stored(2, update('c-1', 2, 5)));
+    await until(() => room.upTo === 3);
+    expect(lastOps(a)).toEqual({ t: 'ops', ops: [update('c-1', 2, 5)], upTo: 3 });
+    expect(room.snapshot().shapes[0]?.regs.x?.value).toBe(9); // LWW: the order of arrival didn't matter
+    room.dispose();
+  });
+
+  it('a seq that never shows up is a hole after holeAfterMs; announced skips are holes at once', async () => {
+    const room = new Room('b', new MemoryOpStore(), { fetchOps: async () => [], gapPollMs: 10, holeAfterMs: 100 });
+    room.receiveRemote('ux', [{ seq: 2, op: create('c-1', 2) }]);
+    expect(room.upTo).toBe(0);
+    await until(() => room.upTo === 2); // seq 1 given up after ~100 ms
+    room.receiveRemote('ux', [{ seq: 5, op: create('d-1', 5) }]);
+    room.skip([3, 4]);
+    expect(room.upTo).toBe(5);
+    room.dispose();
+  });
+
+  it('catch-up includes ops above the watermark, and a lastSeq ahead of it gets a snapshot', () => {
+    const room = new Room('b', new MemoryOpStore());
+    room.receiveRemote('ux', [{ seq: 1, op: create('c-1', 1) }]);
+    room.receiveRemote('ux', [{ seq: 3, op: update('c-1', 3, 9) }]);
+    expect(room.catchUp(1)).toEqual([update('c-1', 3, 9)]); // harmless to resend: LWW is idempotent
+    expect(room.catchUp(3)).toBeNull(); // the client saw more than this room has: snapshot
+  });
+
+  it('waitForWatermark resolves once this server has caught up, or after the timeout', async () => {
+    const db: StoredOp[] = [stored(1, create('c-1', 1)), stored(2, update('c-1', 2, 5))];
+    const room = new Room('b', new MemoryOpStore(), { fetchOps: async (after, to) => db.filter((r) => r.seq > after && r.seq <= to), gapPollMs: 10 });
+    await room.waitForWatermark(2, 2000);
+    expect(room.upTo).toBe(2);
+    const started = Date.now();
+    await room.waitForWatermark(9, 100); // nobody has 3..9
+    expect(Date.now() - started).toBeGreaterThanOrEqual(90);
+    room.dispose();
+  });
+
+  it('publishes accepted ops with their seqs and author, and skips for rejected ones', async () => {
+    const events: unknown[] = [];
+    const room = new Room('b', new MemoryOpStore(), { publish: (e) => events.push(e) });
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1), update('ghost-1', 2, 5)]);
+    expect(events).toEqual([
+      { type: 'skip', seqs: [2] },
+      { type: 'ops', userId: 'ua', ops: [{ seq: 1, op: create('c-1', 1) }] },
+    ]);
+  });
+
+  it('reserves seqs above the highest one the room has seen', async () => {
+    const floors: number[] = [];
+    let counter = 0; // a counter Redis lost: on its own it would start again at 1
+    const room = new Room('b', new MemoryOpStore(), {
+      reserveSeqs: async (n, floor) => {
+        floors.push(floor);
+        counter = Math.max(counter, floor) + n;
+        return counter;
+      },
+    });
+    room.receiveRemote('ux', [{ seq: 7, op: create('c-1', 7) }]);
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [update('c-1', 8, 1)]);
+    expect(floors).toEqual([7]);
+    expect(a.inbox.at(-1)).toMatchObject({ t: 'ack', opIds: ['op-u-8'] });
+    room.dispose();
+  });
+
+  it('a resend of an op known from another server is acked once it is in Postgres, not applied again', async () => {
+    const store = new MemoryOpStore();
+    const room = new Room('b', store, { findDurable: async (ids) => new Map(ids.map((id) => [id, 1])) });
+    room.receiveRemote('ua', [{ seq: 1, op: create('c-1', 1) }]);
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1)]);
+    expect(a.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-c-1-1'], upTo: 1 });
+    expect(store.ops).toEqual([]);
+  });
+
+  it('... and processed as new if it never reaches Postgres (its server died before committing)', async () => {
+    const store = new MemoryOpStore();
+    const room = new Room('b', store, { findDurable: async () => new Map(), foreignWaitMs: 50 });
+    room.receiveRemote('ua', [{ seq: 1, op: create('c-1', 1) }]);
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1)]);
+    expect(store.ops.map((o) => [o.seq, o.opId])).toEqual([[2, 'op-c-1-1']]); // a fresh seq
+    expect(a.inbox.at(-1)).toEqual({ t: 'ack', opIds: ['op-c-1-1'], upTo: 2 });
+  });
+
+  it('an op whose seq was already taken in Postgres is not acked; its resend gets a new seq', async () => {
+    let collide = true;
+    const kept: StoredOp[] = [];
+    const store: OpStore = {
+      append: async (ops) => {
+        if (collide) return ops.map((o) => o.opId);
+        kept.push(...ops);
+        return [];
+      },
+    };
+    const room = new Room('b', store);
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1)]);
+    expect(kinds(a.inbox)).toEqual([]); // no ack: the client keeps it pending
+    collide = false;
+    await room.handleOps(a, [create('c-1', 1)]); // the resend
+    expect(kept.map((o) => o.seq)).toEqual([2]);
+    expect(a.inbox.at(-1)).toMatchObject({ t: 'ack', opIds: ['op-c-1-1'] });
+  });
+
+  it('while saving is paused, batches are dropped unapplied: no ack, no reject', async () => {
+    let paused = true;
+    const store = new MemoryOpStore();
+    const room = new Room('b', store, { isPaused: () => paused });
+    const a = peer('ua');
+    const b = peer('ub');
+    room.join(a);
+    room.join(b);
+    await room.handleOps(a, [create('c-1', 1)]);
+    expect([a.inbox, b.inbox, store.ops]).toEqual([[], [], []]);
+    paused = false;
+    await room.handleOps(a, [create('c-1', 1)]); // resent after `saving { paused: false }`
+    expect(kinds(a.inbox)).toEqual(['ack']);
+    expect(kinds(b.inbox)).toEqual(['ops']);
   });
 });

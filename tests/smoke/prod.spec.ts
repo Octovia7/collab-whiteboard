@@ -58,6 +58,8 @@ test('sign up, draw, reload: the shape persists on the production stack', async 
   // New board, draw a rectangle.
   await page.getByRole('button', { name: 'New board' }).click();
   await expect(page.getByRole('status')).toContainText('Connected');
+  // The E2E debug handle is compiled out of the production build.
+  expect(await page.evaluate(() => '__board' in window)).toBe(false);
   expect(await inkAt(page, 300, 300)).toBe(false);
   await page.getByRole('button', { name: 'Rectangle', exact: true }).click();
   await page.mouse.move(300, 300);

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import { z } from 'zod';
 
 /**
@@ -47,6 +49,13 @@ const schema = z.object({
   PRESENCE_SWEEP_MS: int(100).default(5_000),
   /** Tombstones older than this (since their delete committed) are removed at snapshot time. */
   TOMBSTONE_TTL_MS: int(0).default(24 * 60 * 60 * 1000),
+  /** Names this process in pub/sub messages and locks; defaults to hostname + a random suffix. */
+  SERVER_ID: z.string().regex(/^[\w.-]{1,64}$/, 'letters, digits, . _ - only').optional(),
+  /** Postgres failing this long: stop accepting ops and tell clients "Saving paused". */
+  SAVE_PAUSE_AFTER_MS: int(100).default(30_000),
+  /** Gap filler: how often missing seqs are read from Postgres, and when one is given up as a hole. */
+  GAP_POLL_MS: int(10).default(250),
+  GAP_HOLE_MS: int(100).default(5_000),
   /** If set, GET /metrics requires `Authorization: Bearer <token>`. */
   METRICS_TOKEN: z.string().min(16).optional(),
   /** Where the SQL migrations are; defaults to packages/server/drizzle. */
@@ -54,6 +63,8 @@ const schema = z.object({
   // Fault injection for E2E tests; rejected outright in production.
   WB_FAULT_COMMIT_DELAY_MS: int(0).default(0),
   WB_FAULT_ACK_DELAY_MS: int(0).default(0),
+  /** Registers POST /api/__test/faults (E2E toggles failing commits). Never in production. */
+  WB_FAULT_CONTROL: bool.default('false'),
 });
 
 const DEV_DEFAULTS: Record<string, string> = {
@@ -82,10 +93,13 @@ export interface Config {
   ws: { opsPerSec: number; opsBurst: number; msgsPerSec: number; msgsBurst: number; maxSocketsPerUser: number };
   presence: { timeoutMs: number; sweepMs: number };
   tombstoneTtlMs: number;
+  serverId: string;
+  savePauseAfterMs: number;
+  gap: { pollMs: number; holeAfterMs: number };
   metricsToken: string | undefined;
   migrationsDir: string | undefined;
   /** Fault injection for E2E tests; always zero in production. */
-  faults: { commitDelayMs: number; ackDelayMs: number };
+  faults: { commitDelayMs: number; ackDelayMs: number; control: boolean };
 }
 
 export class ConfigError extends Error {
@@ -104,7 +118,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new ConfigError(parsed.error.issues.map((i) => `${i.path.join('.') || '(env)'}: ${i.message}`));
   }
   const c = parsed.data;
-  if (production && (c.WB_FAULT_COMMIT_DELAY_MS > 0 || c.WB_FAULT_ACK_DELAY_MS > 0)) {
+  if (production && (c.WB_FAULT_COMMIT_DELAY_MS > 0 || c.WB_FAULT_ACK_DELAY_MS > 0 || c.WB_FAULT_CONTROL)) {
     throw new ConfigError(['WB_FAULT_*: fault injection is not allowed in production']);
   }
   if (production && c.JWT_SECRET === DEV_DEFAULTS.JWT_SECRET) {
@@ -135,8 +149,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     presence: { timeoutMs: c.PRESENCE_TIMEOUT_MS, sweepMs: c.PRESENCE_SWEEP_MS },
     tombstoneTtlMs: c.TOMBSTONE_TTL_MS,
+    serverId: c.SERVER_ID ?? `${hostname().replace(/[^\w.-]/g, '') || 'server'}-${randomUUID().slice(0, 8)}`,
+    savePauseAfterMs: c.SAVE_PAUSE_AFTER_MS,
+    gap: { pollMs: c.GAP_POLL_MS, holeAfterMs: c.GAP_HOLE_MS },
     metricsToken: c.METRICS_TOKEN,
     migrationsDir: c.MIGRATIONS_DIR,
-    faults: { commitDelayMs: c.WB_FAULT_COMMIT_DELAY_MS, ackDelayMs: c.WB_FAULT_ACK_DELAY_MS },
+    faults: { commitDelayMs: c.WB_FAULT_COMMIT_DELAY_MS, ackDelayMs: c.WB_FAULT_ACK_DELAY_MS, control: c.WB_FAULT_CONTROL },
   };
 }

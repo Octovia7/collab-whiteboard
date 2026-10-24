@@ -45,13 +45,20 @@ export interface SyncOptions {
  * - unacked ops are also handed to the offline queue, so a reload or closed tab loses nothing.
  */
 export class SyncClient {
-  readonly events = new Emitter<{ status: ConnectionStatus; welcome: undefined; role: Role }>();
+  readonly events = new Emitter<{ status: ConnectionStatus; welcome: undefined; role: Role; saving: boolean }>();
   private socket: WebSocket | null = null;
   /** Submitted locally, not yet sent. */
   private outbox: Op[] = [];
   /** Sent, waiting for an ack; insertion order = send order. */
   private readonly pending = new Map<string, Op>();
+  /**
+   * The server's watermark `upTo` from the last welcome, ops or ack: every op with a seq up to
+   * it has reached us. Not the highest op seq seen: with several servers ops can arrive out of
+   * seq order, and remembering 12 while 11 is still on its way would skip 11 on catch-up.
+   */
   private lastSeq = 0;
+  /** The server stopped accepting ops (Postgres failing); our batches are dropped until it resumes. */
+  private savingPausedFlag = false;
   private welcomed = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private currentStatus: ConnectionStatus = 'connecting';
@@ -102,7 +109,12 @@ export class SyncClient {
     return this.outbox.length + this.pending.size;
   }
 
-  /** Highest server seq seen; sent in `hello` to catch up after a drop. */
+  /** True while the server reports saving paused: edits stay local and pending. */
+  get savingPaused(): boolean {
+    return this.savingPausedFlag;
+  }
+
+  /** The last watermark received; sent in `hello` to catch up after a drop. */
   get seq(): number {
     return this.lastSeq;
   }
@@ -293,7 +305,8 @@ export class SyncClient {
           this.store.reapply(this.outbox);
           this.lastWelcome = { kind: 'snapshot', ops: 0 };
         }
-        this.lastSeq = msg.seq;
+        this.lastSeq = msg.upTo;
+        this.setSavingPaused(false); // a fresh socket starts unpaused; the server says otherwise
         this.welcomed = true;
         this.attempts = 0;
         this.setRole(msg.role);
@@ -308,12 +321,12 @@ export class SyncClient {
       }
       case 'ops':
         this.store.receive(msg.ops);
-        this.lastSeq = Math.max(this.lastSeq, msg.seq);
+        this.lastSeq = Math.max(this.lastSeq, msg.upTo);
         return;
       case 'ack':
         for (const id of msg.opIds) this.pending.delete(id);
         this.persist();
-        this.lastSeq = Math.max(this.lastSeq, msg.seq);
+        this.lastSeq = Math.max(this.lastSeq, msg.upTo);
         this.flush(); // room in the in-flight window again
         return;
       case 'reject': {
@@ -348,6 +361,16 @@ export class SyncClient {
         return;
       case 'typing':
         this.options.presence?.typing(msg.peerId, msg.id);
+        return;
+      case 'saving':
+        this.setSavingPaused(msg.paused);
+        if (!msg.paused) {
+          // Batches sent while paused were dropped unapplied: send everything unacked again.
+          // Ops the server did take are deduped by opId and simply acked.
+          this.outbox = [...this.pending.values(), ...this.outbox];
+          this.pending.clear();
+          this.flush();
+        }
         return;
       case 'pong':
         return; // receipt alone (lastReceivedAt) is the point
@@ -410,6 +433,12 @@ export class SyncClient {
     if (role === this.currentRole) return;
     this.currentRole = role;
     this.events.emit('role', role);
+  }
+
+  private setSavingPaused(paused: boolean): void {
+    if (paused === this.savingPausedFlag) return;
+    this.savingPausedFlag = paused;
+    this.events.emit('saving', paused);
   }
 
   private setStatus(status: ConnectionStatus): void {

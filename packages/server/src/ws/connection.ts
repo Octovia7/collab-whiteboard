@@ -1,4 +1,4 @@
-import { CLOSE, parseClientMessage } from '@whiteboard/shared';
+import { CLOSE, TRY_AGAIN_LATER, parseClientMessage } from '@whiteboard/shared';
 import type { Op, Role, ServerMessage } from '@whiteboard/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import { WebSocket } from 'ws';
@@ -6,6 +6,7 @@ import type { RawData } from 'ws';
 import type { Metrics } from '../metrics';
 import type { UserLimits } from './rateLimit';
 import { TokenBucket } from './rateLimit';
+import { SequencingUnavailable } from './Room';
 import type { Peer, Room } from './Room';
 import type { RoomManager } from './RoomManager';
 
@@ -87,17 +88,27 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
     }
     chain = chain
       .then(() => limits.waitForOps(peer.userId, ops.length, () => metrics.wsThrottled.inc()))
-      .then(() => {
+      .then(async () => {
         queuedOps -= ops.length;
         if (closed) return;
-        // handleOps applies and broadcasts synchronously, then waits for the commit to ack.
-        // Not awaiting it here keeps the next batch from waiting on this one's commit.
-        r.handleOps(peer, ops).catch((err: unknown) => {
+        // Wait until this batch is applied (seqs reserved, delivered), so the next batch from
+        // this socket applies after it; but not for its commit: the ack follows on its own.
+        const { acked } = await r.receive(peer, ops);
+        acked.catch((err: unknown) => {
           // No ack was sent, so the client keeps these ops pending and will resend them.
-          log.error({ err }, 'failed to process op batch');
+          log.error({ err }, 'failed to ack op batch');
         });
       })
-      .catch((err: unknown) => log.error({ err }, 'op queue failed'));
+      .catch((err: unknown) => {
+        if (err instanceof SequencingUnavailable) {
+          // Nothing was applied. Closing (not final) makes the client reconnect with backoff
+          // and resend; by then Redis is hopefully back.
+          log.warn({ err: { message: (err.cause as Error | undefined)?.message } }, 'cannot sequence ops (Redis): closing so the client retries');
+          socket.close(TRY_AGAIN_LATER, 'try_again_later');
+          return;
+        }
+        log.error({ err }, 'op queue failed');
+      });
   };
 
   socket.on('message', (data: RawData, isBinary: boolean) => {
@@ -151,7 +162,7 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
   socket.on('close', (code) => {
     closed = true;
     metrics.wsConnections.dec();
-    limits.close(peer.userId);
+    limits.close(peer.userId, deps.connId);
     if (room) rooms.leave(room, peer);
     log.info({ code }, 'socket closed');
   });

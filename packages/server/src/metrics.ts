@@ -32,6 +32,10 @@ export function createMetrics() {
     heartbeatTimeouts: new Counter({ name: 'heartbeat_timeouts_total', help: 'Sockets dropped for missing heartbeats', registers: [registry] }),
     wsThrottled: new Counter({ name: 'ws_throttled_total', help: 'Op batches delayed by the per-user rate limit', registers: [registry] }),
     wsRateLimitDisconnects: new Counter({ name: 'ws_rate_limit_disconnects_total', help: 'Sockets closed for exceeding rate limits', registers: [registry] }),
+    gapOpsFilled: new Counter({ name: 'gap_ops_filled_total', help: 'Missing seqs read from Postgres (lost or late pub/sub messages)', registers: [registry] }),
+    holesSkipped: new Counter({ name: 'seq_holes_skipped_total', help: 'Missing seqs given up on after GAP_HOLE_MS (their server died before publishing)', registers: [registry] }),
+    savingPaused: new Gauge({ name: 'saving_paused', help: '1 while Postgres commits have been failing long enough to pause saving', registers: [registry] }),
+    sessionsRevoked: new Counter({ name: 'sessions_revoked_total', help: 'Logouts that closed sockets on this server', registers: [registry] }),
   };
 }
 

@@ -1,5 +1,6 @@
 import type { Role } from '@whiteboard/shared';
-import { and, asc, desc, eq, gt, inArray, isNull, lte, max } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, max } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { withRetry as retry } from '../errors';
 import { boardMembers, boardOps, boardSnapshots, boards, users } from '../db/schema';
@@ -17,6 +18,11 @@ export interface BoardSummary {
   title: string;
   role: Role;
   updatedAt: string;
+}
+
+export interface ShareLink {
+  role: 'viewer' | 'editor';
+  token: string;
 }
 
 export interface LoadedBoard {
@@ -154,6 +160,59 @@ export class Repo {
     return rows.length > 0;
   }
 
+  // ---- share links ----
+
+  async getLink(boardId: string): Promise<ShareLink | null> {
+    const [row] = await retry(() => this.db.select({ role: boards.linkRole, token: boards.linkToken }).from(boards).where(eq(boards.id, boardId)));
+    return row?.role && row.token ? { role: row.role, token: row.token } : null;
+  }
+
+  /**
+   * Turns link sharing on with `role` (a new 32-byte token every time, so changing the role or
+   * re-enabling also invalidates any old link), or off with null. Not retried: a retry after a
+   * lost reply would hand out a different token than the one stored.
+   */
+  async setLink(boardId: string, role: 'viewer' | 'editor' | null): Promise<ShareLink | null> {
+    const token = role ? randomBytes(32).toString('base64url') : null;
+    await this.db.update(boards).set({ linkRole: role, linkToken: token }).where(eq(boards.id, boardId));
+    return role && token ? { role, token } : null;
+  }
+
+  /**
+   * Joins the board a share link points to, in one transaction. A new member gets the link's
+   * role; an existing viewer is raised to editor by an editor link; nobody is ever lowered,
+   * and nobody becomes owner. Returns the board as the user now sees it, whether the role
+   * changed, or null if the link is unknown, turned off, or its board deleted.
+   */
+  async joinByToken(token: string, userId: string): Promise<{ board: BoardSummary; changed: boolean } | null> {
+    return this.db.transaction(async (tx) => {
+      const [board] = await tx
+        .select({ id: boards.id, role: boards.linkRole })
+        .from(boards)
+        .where(and(eq(boards.linkToken, token), isNotNull(boards.linkRole), isNull(boards.deletedAt)));
+      if (!board?.role) return null;
+      const [member] = await tx
+        .select({ role: boardMembers.role })
+        .from(boardMembers)
+        .where(and(eq(boardMembers.boardId, board.id), eq(boardMembers.userId, userId)));
+      let changed = false;
+      if (!member) {
+        await tx.insert(boardMembers).values({ boardId: board.id, userId, role: board.role });
+        changed = true;
+      } else if (member.role === 'viewer' && board.role === 'editor') {
+        await tx.update(boardMembers).set({ role: 'editor' }).where(and(eq(boardMembers.boardId, board.id), eq(boardMembers.userId, userId)));
+        changed = true;
+      }
+      const [summary] = await tx
+        .select({ id: boards.id, title: boards.title, role: boardMembers.role, updatedAt: boards.updatedAt })
+        .from(boardMembers)
+        .innerJoin(boards, eq(boards.id, boardMembers.boardId))
+        .where(and(eq(boardMembers.boardId, board.id), eq(boardMembers.userId, userId)));
+      if (!summary) throw new Error('membership missing after join');
+      return { board: { ...summary, updatedAt: summary.updatedAt.toISOString() }, changed };
+    });
+  }
+
   async removeMember(boardId: string, userId: string): Promise<void> {
     await retry(() => this.db.delete(boardMembers).where(and(eq(boardMembers.boardId, boardId), eq(boardMembers.userId, userId))));
   }
@@ -189,10 +248,52 @@ export class Repo {
    * One multi-row insert. A resent op whose first copy was already stored (its ack was lost,
    * e.g. the server crashed between commit and ack) hits UNIQUE (board_id, op_id) and is
    * skipped: it is never stored twice.
+   *
+   * Any conflict is skipped, including the primary key (board_id, seq): that one means another
+   * op already has this seq (a reset Redis counter racing an in-flight op). Returns those
+   * opIds, which were not stored; the caller must not ack them. Safe to retry: a retry after a
+   * lost reply finds every row already there.
    */
-  async insertOps(rows: StoredOp[]): Promise<void> {
-    if (rows.length === 0) return;
-    await retry(() => this.db.insert(boardOps).values(rows).onConflictDoNothing({ target: [boardOps.boardId, boardOps.opId] }));
+  async insertOps(rows: StoredOp[]): Promise<string[]> {
+    if (rows.length === 0) return [];
+    const inserted = await retry(() => this.db.insert(boardOps).values(rows).onConflictDoNothing().returning({ opId: boardOps.opId }));
+    if (inserted.length === rows.length) return [];
+    const done = new Set(inserted.map((r) => r.opId));
+    const skipped = rows.filter((r) => !done.has(r.opId));
+    // Skipped because the op is already stored (a resend): fine. Otherwise its seq was taken.
+    // One batch holds ops of many boards, so look them up per board.
+    const byBoard = new Map<string, StoredOp[]>();
+    for (const r of skipped) byBoard.set(r.boardId, [...(byBoard.get(r.boardId) ?? []), r]);
+    const notStored: string[] = [];
+    for (const [boardId, ops] of byBoard) {
+      const present = await this.opSeqs(boardId, ops.map((r) => r.opId));
+      for (const r of ops) if (!present.has(r.opId)) notStored.push(r.opId);
+    }
+    return notStored;
+  }
+
+  /** Committed ops among `opIds`, with their seqs. */
+  async opSeqs(boardId: string, opIds: string[]): Promise<Map<string, number>> {
+    if (opIds.length === 0) return new Map();
+    const rows = await retry(() =>
+      this.db
+        .select({ opId: boardOps.opId, seq: boardOps.seq })
+        .from(boardOps)
+        .where(and(eq(boardOps.boardId, boardId), inArray(boardOps.opId, opIds))),
+    );
+    return new Map(rows.map((r) => [r.opId, r.seq]));
+  }
+
+  /** Ops with afterSeq < seq <= toSeq, in seq order (gap filling); at most `limit`. */
+  async opsInRange(boardId: string, afterSeq: number, toSeq: number, limit = 5000): Promise<StoredOp[]> {
+    return retry(() =>
+      this.db
+        .select({ boardId: boardOps.boardId, seq: boardOps.seq, opId: boardOps.opId, userId: boardOps.userId, op: boardOps.op, createdAt: boardOps.createdAt })
+        .from(boardOps)
+        .where(and(eq(boardOps.boardId, boardId), gt(boardOps.seq, afterSeq), lte(boardOps.seq, toSeq)))
+        .orderBy(asc(boardOps.seq))
+        .limit(limit),
+    );
   }
 
   async countOps(boardId: string, opIds?: string[]): Promise<number> {

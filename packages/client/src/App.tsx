@@ -19,6 +19,7 @@ import { ToolController } from './tools/ToolController';
 import { ConnectionBadge } from './ui/ConnectionBadge';
 import { NoteEditor } from './ui/NoteEditor';
 import { OnlineList } from './ui/OnlineList';
+import { ShareDialog } from './ui/ShareDialog';
 import { Toolbar } from './ui/Toolbar';
 import { UndoControls } from './ui/UndoControls';
 import { UserMenu } from './ui/UserMenu';
@@ -69,6 +70,7 @@ export function App({ board: summary, user, onLogout }: Props) {
   // Created once per mount and never put in React state that changes: the canvas reads the
   // store directly, so shape edits never re-render React.
   const [board] = useState(() => createBoard(summary.id));
+  const [sharing, setSharing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -114,6 +116,10 @@ export function App({ board: summary, user, onLogout }: Props) {
     // is announced so other tabs show "… is typing".
     tools.setNoteLock((id) => presence.typingIn(id) !== undefined);
     const offEditing = tools.events.on('change', () => sync.sendTyping(tools.editingNote));
+    // Logged out in another tab (on any server): this session is dead, go back to the login page.
+    const offStatus = sync.events.on('status', (status) => {
+      if (status === 'disconnected' && sync.closeReason === 'logged_out') onLogout();
+    });
 
     // ?demo=N seeds only an empty board, after the server's snapshot has arrived, so a second
     // tab on the same board doesn't add another copy.
@@ -138,8 +144,8 @@ export function App({ board: summary, user, onLogout }: Props) {
       tools.setReadOnly(sync.role === 'viewer');
       sync.start();
     });
-    // Dev/test builds only: the constant check lets the production bundle drop debug.ts.
-    const uninstallDebug = import.meta.env.DEV ? installDebugHandle(board) : () => {};
+    // Development and E2E builds only: the constant check lets the production bundle drop debug.ts.
+    const uninstallDebug = __DEBUG_HANDLE__ ? installDebugHandle(board) : () => {};
 
     return () => {
       uninstallDebug();
@@ -149,6 +155,7 @@ export function App({ board: summary, user, onLogout }: Props) {
       queue.current?.close();
       queue.current = null;
       offRole();
+      offStatus();
       offEditing();
       offWelcome();
       offPrune();
@@ -160,7 +167,7 @@ export function App({ board: summary, user, onLogout }: Props) {
       redrawOverlay.current = () => {};
       renderer.stop();
     };
-  }, [board, user.id]);
+  }, [board, user.id, onLogout]);
 
   const getCenter = useCallback(() => {
     const el = containerRef.current;
@@ -182,10 +189,16 @@ export function App({ board: summary, user, onLogout }: Props) {
         </button>
         <span className="board-title">{summary.title}</span>
         <OnlineList presence={board.presence} />
+        {summary.role === 'owner' && (
+          <button type="button" className="share-button" onClick={() => setSharing(true)}>
+            Share
+          </button>
+        )}
         <UserMenu user={user} onLogout={onLogout} />
       </header>
       <ConnectionBadge sync={board.sync} boardId={board.boardId} />
       <NoteEditor tools={board.tools} store={board.store} camera={board.camera} />
+      {sharing && <ShareDialog boardId={board.boardId} onClose={() => setSharing(false)} />}
     </>
   );
 }

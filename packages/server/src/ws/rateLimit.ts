@@ -1,7 +1,14 @@
+import type { FastifyBaseLogger } from 'fastify';
+import type { Redis } from 'ioredis';
+import { closeSocket, openSocket, takeOpTokens } from '../redisState';
+
 /**
  * Token bucket: holds up to `burst` tokens and refills at `perSec`. Taking n tokens succeeds
  * if they're there; otherwise the caller learns how long to wait. Allows short bursts (a
  * paste, a reconnect resend) while capping the sustained rate.
+ *
+ * Used per socket for the message limit, and as the fallback for the per-user op budget when
+ * Redis is unreachable.
  */
 export class TokenBucket {
   private tokens: number;
@@ -33,39 +40,60 @@ export class TokenBucket {
   }
 }
 
-/** Per-user op budgets, shared by all of a user's sockets on this server (Redis-backed in milestone 8). */
+/**
+ * Per-user limits shared by all servers (system-design.md, "Security"): an op budget (Redis
+ * token bucket `rl:ws:{userId}`) and a cap on open sockets (`sockets:{userId}`).
+ */
 export class UserLimits {
-  private readonly buckets = new Map<string, { bucket: TokenBucket; sockets: number }>();
+  /** Used only while Redis is unreachable, so a Redis blip throttles per server instead of not at all. */
+  private readonly fallback = new Map<string, TokenBucket>();
+  private lastWarn = 0;
 
   constructor(
+    private readonly redis: Redis,
     private readonly opsPerSec: number,
     private readonly opsBurst: number,
     readonly maxSockets: number,
+    /** A socket's entry expires this long after its server last refreshed it (a crashed server's sockets). */
+    private readonly socketTtlMs: number,
+    private readonly log: FastifyBaseLogger,
   ) {}
 
-  /** Registers a socket; false if the user already has the maximum open. */
-  open(userId: string): boolean {
-    const entry = this.buckets.get(userId) ?? { bucket: new TokenBucket(this.opsPerSec, this.opsBurst), sockets: 0 };
-    if (entry.sockets >= this.maxSockets) return false;
-    entry.sockets++;
-    this.buckets.set(userId, entry);
-    return true;
+  /** Registers a socket; false if the user already has the maximum open. Throws if Redis is down (the upgrade then gets 503). */
+  open(userId: string, connId: string): Promise<boolean> {
+    return openSocket(this.redis, userId, connId, this.maxSockets, this.socketTtlMs);
   }
 
-  close(userId: string): void {
-    const entry = this.buckets.get(userId);
-    if (!entry) return;
-    entry.sockets--;
-    if (entry.sockets <= 0) this.buckets.delete(userId);
+  close(userId: string, connId: string): void {
+    // If this fails, the entry expires on its own once this server stops refreshing it.
+    closeSocket(this.redis, userId, connId).catch(() => {});
   }
 
   /** Waits until the user may send `n` more ops (throttling, not rejecting). */
   async waitForOps(userId: string, n: number, onThrottled: () => void): Promise<void> {
-    const entry = this.buckets.get(userId);
-    if (!entry) return;
-    for (let wait = entry.bucket.take(n); wait > 0; wait = entry.bucket.take(n)) {
+    for (let wait = await this.take(userId, n); wait > 0; wait = await this.take(userId, n)) {
       onThrottled();
       await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+
+  private async take(userId: string, n: number): Promise<number> {
+    try {
+      const wait = await takeOpTokens(this.redis, userId, n, this.opsPerSec, this.opsBurst);
+      this.fallback.delete(userId);
+      return wait;
+    } catch (err) {
+      const now = Date.now();
+      if (now - this.lastWarn > 10_000) {
+        this.lastWarn = now;
+        this.log.warn({ err: { message: (err as Error).message } }, 'rate limit falling back to per-server buckets (Redis)');
+      }
+      let bucket = this.fallback.get(userId);
+      if (!bucket) {
+        bucket = new TokenBucket(this.opsPerSec, this.opsBurst);
+        this.fallback.set(userId, bucket);
+      }
+      return bucket.take(n);
     }
   }
 }

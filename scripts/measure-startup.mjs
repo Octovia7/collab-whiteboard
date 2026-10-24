@@ -15,7 +15,8 @@ const runs = Number(process.argv[2] ?? 3);
 for (let run = 1; run <= runs; run++) {
   const t0 = Date.now();
   docker(...COMPOSE, 'up', '-d', '--force-recreate', '--no-deps', 'server');
-  const id = docker(...COMPOSE, 'ps', '-q', 'server');
+  // The stack runs two server replicas; both are recreated, the first is measured.
+  const id = docker(...COMPOSE, 'ps', '-q', 'server').split(/\r?\n/)[0] ?? '';
   let healthyAt = 0;
   while (Date.now() - t0 < 120_000) {
     const status = docker('inspect', id, '--format', '{{.State.Health.Status}}');
