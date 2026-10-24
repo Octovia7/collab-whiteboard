@@ -17,3 +17,18 @@ export function socketUrl(boardId: string): string {
   // Same origin: Vite proxies /ws to the server in dev, so the session cookie is sent.
   return `${proto}//${window.location.host}/ws?board=${encodeURIComponent(boardId)}`;
 }
+
+/** A share link is `/?join=<token>` (43 base64url characters). */
+export function joinTokenFromUrl(): string | null {
+  const token = new URL(window.location.href).searchParams.get('join');
+  return token && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
+}
+
+export function shareUrl(token: string): string {
+  return `${window.location.origin}/?join=${encodeURIComponent(token)}`;
+}
+
+/** Opens a board, replacing the current history entry (used after following a share link). */
+export function replaceWithBoard(id: string): void {
+  window.location.replace(`?board=${encodeURIComponent(id)}`);
+}

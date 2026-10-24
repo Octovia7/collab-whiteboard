@@ -13,6 +13,15 @@ export interface BoardSummary {
   updatedAt: string;
 }
 
+export interface Member extends User {
+  role: Role;
+}
+
+export interface ShareLink {
+  role: 'viewer' | 'editor';
+  token: string;
+}
+
 export type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
 
 /** JSON over fetch; the session is an httpOnly cookie the browser sends by itself. */
@@ -41,4 +50,14 @@ export const api = {
   listBoards: () => request<{ boards: BoardSummary[] }>('GET', '/api/boards'),
   createBoard: (title?: string) => request<{ board: BoardSummary }>('POST', '/api/boards', title ? { title } : {}),
   getBoard: (id: string) => request<{ board: BoardSummary }>('GET', `/api/boards/${encodeURIComponent(id)}`),
+  listMembers: (id: string) => request<{ members: Member[] }>('GET', `/api/boards/${encodeURIComponent(id)}/members`),
+  addMember: (id: string, email: string, role: 'editor' | 'viewer') =>
+    request<{ member: Member }>('POST', `/api/boards/${encodeURIComponent(id)}/members`, { email, role }),
+  setMemberRole: (id: string, userId: string, role: 'editor' | 'viewer') =>
+    request<null>('PATCH', `/api/boards/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role }),
+  removeMember: (id: string, userId: string) => request<null>('DELETE', `/api/boards/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
+  getLink: (id: string) => request<{ link: ShareLink | null }>('GET', `/api/boards/${encodeURIComponent(id)}/link`),
+  /** On with a role (a new token every time), or off with null. */
+  setLink: (id: string, role: 'viewer' | 'editor' | null) => request<{ link: ShareLink | null }>('PUT', `/api/boards/${encodeURIComponent(id)}/link`, { role }),
+  join: (token: string) => request<{ board: BoardSummary }>('POST', `/api/join/${encodeURIComponent(token)}`),
 };
