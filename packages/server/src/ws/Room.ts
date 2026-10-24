@@ -1,4 +1,4 @@
-import { Board } from '@whiteboard/shared';
+import { Board, PRESENCE } from '@whiteboard/shared';
 import type { BoardSnapshot, Op, PeerInfo, Role, ServerMessage, ShapeId } from '@whiteboard/shared';
 import type { SnapshotState } from '../db/schema';
 import type { OpStore, StoredOp } from '../persistence/OpStore';
@@ -15,6 +15,8 @@ export interface Peer {
   role: Role;
   /** Must be a no-op once the socket has closed. */
   send(msg: ServerMessage): void;
+  /** Sends an already-serialized message (one cursor batch, serialized once for everyone). */
+  sendRaw(json: string): void;
   close(code: number, reason: string): void;
   /** Drops a socket that stopped answering (no close handshake: the other end may be gone). */
   terminate(): void;
@@ -41,7 +43,8 @@ export type BoardEvent = { type: 'ops'; userId: string; ops: { seq: number; op: 
 export type PresenceEvent =
   | { type: 'join'; peer: PeerInfo }
   | { type: 'leave'; peerId: string }
-  | { type: 'cursor'; peerId: string; x: number; y: number }
+  /** Latest cursors of one server's peers, batched every 50 ms. */
+  | { type: 'cursors'; cursors: { peerId: string; x: number; y: number }[] }
   | { type: 'select'; peerId: string; ids: string[] }
   | { type: 'typing'; peerId: string; id: string | null };
 
@@ -126,6 +129,16 @@ export class Room {
   /** When each missing seq (above the watermark, not received) was first noticed. */
   private readonly missingSince = new Map<number, number>();
   private gapTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Cursor batching: the latest cursor per peer (local or from other servers) since the last
+   * flush. Relaying every cursor to every socket is O(peers^2) messages per tick; batching makes
+   * it one message per socket per 50 ms, serialized once (benchmarks.md: cursors were the main
+   * cost of a busy board).
+   */
+  private readonly pendingCursors = new Map<string, { x: number; y: number }>();
+  /** The subset that came from this server's own sockets: only those are published to others. */
+  private readonly localCursors = new Set<string>();
+  private cursorTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly watermarkWaiters: { seq: number; resolve: () => void }[] = [];
   private disposed = false;
   /** Seqs handed out by the default (single-process) sequencer. */
@@ -314,6 +327,7 @@ export class Room {
 
   leave(peer: Peer): void {
     if (!this.peers.delete(peer)) return;
+    this.dropCursor(peer.peerId);
     for (const p of this.peers) p.send({ t: 'peer-leave', peerId: peer.peerId });
     this.options.publishPresence?.({ type: 'leave', peerId: peer.peerId });
   }
@@ -327,29 +341,63 @@ export class Room {
     from: Peer,
     msg: { t: 'cursor'; x: number; y: number } | { t: 'select'; ids: string[] } | { t: 'typing'; id: string | null },
   ): void {
-    const event: PresenceEvent =
-      msg.t === 'cursor'
-        ? { type: 'cursor', peerId: from.peerId, x: msg.x, y: msg.y }
-        : msg.t === 'select'
-          ? { type: 'select', peerId: from.peerId, ids: msg.ids }
-          : { type: 'typing', peerId: from.peerId, id: msg.id };
+    if (msg.t === 'cursor') {
+      // Batched: goes out with everyone else's at the next 50 ms tick.
+      this.queueCursor(from.peerId, msg.x, msg.y, true);
+      return;
+    }
+    const event: PresenceEvent = msg.t === 'select' ? { type: 'select', peerId: from.peerId, ids: msg.ids } : { type: 'typing', peerId: from.peerId, id: msg.id };
     this.deliverPresence(event, from);
     this.options.publishPresence?.(event);
   }
 
   /** Presence from another server (or our own sweep): delivered to every local socket. */
   deliverPresence(event: PresenceEvent, except?: Peer): void {
+    if (event.type === 'cursors') {
+      // Another server's batch joins ours; it isn't published again.
+      for (const c of event.cursors) this.queueCursor(c.peerId, c.x, c.y, false);
+      return;
+    }
     const out: ServerMessage =
       event.type === 'join'
         ? { t: 'peer-join', peer: event.peer }
         : event.type === 'leave'
           ? { t: 'peer-leave', peerId: event.peerId }
-          : event.type === 'cursor'
-            ? { t: 'cursor', peerId: event.peerId, x: event.x, y: event.y }
-            : event.type === 'select'
-              ? { t: 'select', peerId: event.peerId, ids: event.ids }
-              : { t: 'typing', peerId: event.peerId, id: event.id };
+          : event.type === 'select'
+            ? { t: 'select', peerId: event.peerId, ids: event.ids }
+            : { t: 'typing', peerId: event.peerId, id: event.id };
+    if (event.type === 'leave') this.dropCursor(event.peerId);
     for (const p of this.peers) if (p !== except) p.send(out);
+  }
+
+  private queueCursor(peerId: string, x: number, y: number, local: boolean): void {
+    this.pendingCursors.set(peerId, { x, y });
+    if (local) this.localCursors.add(peerId);
+    this.cursorTimer ??= setTimeout(() => this.flushCursors(), PRESENCE.cursorIntervalMs);
+  }
+
+  private dropCursor(peerId: string): void {
+    this.pendingCursors.delete(peerId);
+    this.localCursors.delete(peerId);
+  }
+
+  /**
+   * One tick: every pending cursor goes to every local socket in one message, serialized once
+   * (a socket's own cursor in it is ignored by its client), and this server's own cursors to
+   * the other servers in one pub/sub message. A socket whose own cursor is the only one in the
+   * batch gets nothing.
+   */
+  private flushCursors(): void {
+    this.cursorTimer = null;
+    if (this.pendingCursors.size === 0) return;
+    const cursors = [...this.pendingCursors].map(([peerId, c]) => ({ peerId, x: c.x, y: c.y }));
+    const local = cursors.filter((c) => this.localCursors.has(c.peerId));
+    this.pendingCursors.clear();
+    this.localCursors.clear();
+    if (local.length > 0) this.options.publishPresence?.({ type: 'cursors', cursors: local });
+    const only = cursors.length === 1 ? cursors[0]?.peerId : undefined;
+    const json = JSON.stringify({ t: 'cursors', cursors } satisfies ServerMessage);
+    for (const p of this.peers) if (p.peerId !== only) p.sendRaw(json);
   }
 
   /** Sends a message to every local socket (e.g. `saving`). */
@@ -390,6 +438,8 @@ export class Room {
   /** Stops the gap filler and releases watermark waiters (room unloaded). */
   dispose(): void {
     this.disposed = true;
+    if (this.cursorTimer) clearTimeout(this.cursorTimer);
+    this.cursorTimer = null;
     if (this.gapTimer) clearTimeout(this.gapTimer);
     this.gapTimer = null;
     for (const w of this.watermarkWaiters.splice(0)) w.resolve();

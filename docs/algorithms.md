@@ -463,6 +463,8 @@ function onPointerMove(worldX: number, worldY: number) {
 // so the final resting position is always sent
 ```
 
+**Batch on the server, too.** Throttling caps each client at 20 cursors a second, but relaying each one to everyone is still O(n²): 50 people make 1,000 cursors a second, which become 49,000 messages a second. The server instead keeps the latest cursor per peer and, every 50 ms, sends each socket one `cursors` message with all of them, serialized once; servers exchange the same batches over Redis. Cursors arrive in steps of 50 ms either way, so nobody sees a difference, and the interpolation below smooths it. The load test showed cursors were the main cost of a busy board (docs/benchmarks.md).
+
 Send cursor positions in **world** coordinates (section 10), not screen coordinates. Each viewer converts them to their own screen, so a cursor points at the same shape for everyone regardless of zoom.
 
 **Interpolation: making 20 updates look like 60.** If you jump the cursor to each new position, it moves in visible hops. Instead, each frame move it part of the way toward its latest target:

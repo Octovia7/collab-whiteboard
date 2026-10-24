@@ -1,0 +1,354 @@
+{
+  "startedAt": "2026-10-24T18:32:34.137Z",
+  "machine": {
+    "host": "runnervmr9t6g",
+    "os": "linux 7.0.0-1017-azure",
+    "cpuModel": "AMD EPYC 7763 64-Core Processor",
+    "logicalCpus": 2,
+    "ramMb": 7936,
+    "dockerVm": {
+      "cpus": 2,
+      "memMb": 7936
+    },
+    "node": "v22.23.3",
+    "githubRunner": {
+      "name": "GitHub Actions 1000000138",
+      "os": "Linux",
+      "arch": "X64"
+    }
+  },
+  "workers": 2,
+  "moveMs": 200,
+  "cursorMs": 50,
+  "settleMs": 5000,
+  "measureMs": 30000,
+  "minFreeMb": 500,
+  "stoppedEarly": "after 90 bots: the stack rejected 0 ops, closed 16 sockets (74 of 90 still open; bot 14: 1013 try_again_later; bot 64: 1013 try_again_later; bot 66: 1013 try_again_later), refused 0, sent saving 0",
+  "results": [
+    {
+      "bots": 60,
+      "perReplica": [
+        26,
+        34
+      ],
+      "same": {
+        "n": 273105,
+        "p50": 77.9,
+        "p95": 1640,
+        "p99": 2500,
+        "max": 3013.5
+      },
+      "cross": {
+        "n": 270305,
+        "p50": 101.8,
+        "p95": 1580,
+        "p99": 2520,
+        "max": 3024.9
+      },
+      "all": {
+        "n": 543410,
+        "p50": 91.1,
+        "p95": 1620,
+        "p99": 2510,
+        "max": 3024.9
+      },
+      "opsPerSec": {
+        "sent": 293,
+        "acked": 310,
+        "expected": 300
+      },
+      "deliveriesPerSec": 18107,
+      "problems": {
+        "rejected": 0,
+        "closed": 0,
+        "saving": 0,
+        "refused": 0,
+        "aliveAtEnd": 60,
+        "closesSoFar": []
+      },
+      "generator": {
+        "cpuPct": 38,
+        "rssMb": 209
+      },
+      "hostFreeRamMb": {
+        "min": 6467,
+        "atStart": 6474
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 29,
+          "cpuMax": 31,
+          "memMaxMb": 6
+        },
+        "server-1": {
+          "cpuAvg": 34,
+          "cpuMax": 39,
+          "memMaxMb": 70
+        },
+        "server-2": {
+          "cpuAvg": 42,
+          "cpuMax": 54,
+          "memMaxMb": 71
+        },
+        "postgres-1": {
+          "cpuAvg": 7,
+          "cpuMax": 11,
+          "memMaxMb": 58
+        },
+        "redis-1": {
+          "cpuAvg": 7,
+          "cpuMax": 10,
+          "memMaxMb": 4
+        }
+      }
+    },
+    {
+      "bots": 70,
+      "perReplica": [
+        31,
+        39
+      ],
+      "same": {
+        "n": 337869,
+        "p50": 3290,
+        "p95": 4670,
+        "p99": 5000,
+        "max": 5268.6
+      },
+      "cross": {
+        "n": 336503,
+        "p50": 971.2,
+        "p95": 4670,
+        "p99": 5010,
+        "max": 5281.7
+      },
+      "all": {
+        "n": 674372,
+        "p50": 2640,
+        "p95": 4670,
+        "p99": 5010,
+        "max": 5281.7
+      },
+      "opsPerSec": {
+        "sent": 321,
+        "acked": 291,
+        "expected": 350
+      },
+      "deliveriesPerSec": 22384,
+      "problems": {
+        "rejected": 0,
+        "closed": 0,
+        "saving": 0,
+        "refused": 0,
+        "aliveAtEnd": 70,
+        "closesSoFar": []
+      },
+      "generator": {
+        "cpuPct": 35,
+        "rssMb": 189
+      },
+      "hostFreeRamMb": {
+        "min": 6439,
+        "atStart": 6460
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 30,
+          "cpuMax": 34,
+          "memMaxMb": 6
+        },
+        "server-1": {
+          "cpuAvg": 37,
+          "cpuMax": 43,
+          "memMaxMb": 77
+        },
+        "server-2": {
+          "cpuAvg": 41,
+          "cpuMax": 45,
+          "memMaxMb": 80
+        },
+        "postgres-1": {
+          "cpuAvg": 6,
+          "cpuMax": 11,
+          "memMaxMb": 64
+        },
+        "redis-1": {
+          "cpuAvg": 7,
+          "cpuMax": 10,
+          "memMaxMb": 8
+        }
+      }
+    },
+    {
+      "bots": 80,
+      "perReplica": [
+        36,
+        44
+      ],
+      "same": {
+        "n": 331812,
+        "p50": 1400,
+        "p95": 24330,
+        "p99": 24840,
+        "max": 25136.1
+      },
+      "cross": {
+        "n": 347448,
+        "p50": 584.5,
+        "p95": 24430,
+        "p99": 24960,
+        "max": 25306.8
+      },
+      "all": {
+        "n": 679260,
+        "p50": 625.2,
+        "p95": 24380,
+        "p99": 24900,
+        "max": 25306.8
+      },
+      "opsPerSec": {
+        "sent": 374,
+        "acked": 262,
+        "expected": 400
+      },
+      "deliveriesPerSec": 22583,
+      "problems": {
+        "rejected": 0,
+        "closed": 0,
+        "saving": 0,
+        "refused": 0,
+        "aliveAtEnd": 80,
+        "closesSoFar": []
+      },
+      "generator": {
+        "cpuPct": 37,
+        "rssMb": 205
+      },
+      "hostFreeRamMb": {
+        "min": 6422,
+        "atStart": 6450
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 30,
+          "cpuMax": 33,
+          "memMaxMb": 7
+        },
+        "server-1": {
+          "cpuAvg": 38,
+          "cpuMax": 45,
+          "memMaxMb": 83
+        },
+        "server-2": {
+          "cpuAvg": 40,
+          "cpuMax": 54,
+          "memMaxMb": 91
+        },
+        "postgres-1": {
+          "cpuAvg": 6,
+          "cpuMax": 11,
+          "memMaxMb": 62
+        },
+        "redis-1": {
+          "cpuAvg": 7,
+          "cpuMax": 10,
+          "memMaxMb": 8
+        }
+      }
+    },
+    {
+      "bots": 90,
+      "perReplica": [
+        39,
+        51
+      ],
+      "same": {
+        "n": 319145,
+        "p50": 32690,
+        "p95": 42400,
+        "p99": 43150,
+        "max": 43393.6
+      },
+      "cross": {
+        "n": 347210,
+        "p50": 35550,
+        "p95": 42600,
+        "p99": 43380,
+        "max": 43778.1
+      },
+      "all": {
+        "n": 666355,
+        "p50": 34570,
+        "p95": 42520,
+        "p99": 43250,
+        "max": 43778.1
+      },
+      "opsPerSec": {
+        "sent": 348,
+        "acked": 261,
+        "expected": 450
+      },
+      "deliveriesPerSec": 22193,
+      "problems": {
+        "rejected": 0,
+        "closed": 16,
+        "saving": 0,
+        "refused": 0,
+        "aliveAtEnd": 74,
+        "closesSoFar": [
+          "bot 14: 1013 try_again_later",
+          "bot 64: 1013 try_again_later",
+          "bot 66: 1013 try_again_later",
+          "bot 86: 1013 try_again_later",
+          "bot 82: 1013 try_again_later",
+          "bot 88: 1013 try_again_later",
+          "bot 68: 1013 try_again_later",
+          "bot 85: 1013 try_again_later",
+          "bot 3: 1013 try_again_later",
+          "bot 49: 1013 try_again_later",
+          "bot 65: 1013 try_again_later",
+          "bot 89: 1013 try_again_later",
+          "bot 79: 1013 try_again_later",
+          "bot 77: 1013 try_again_later",
+          "bot 21: 1013 try_again_later",
+          "bot 61: 1013 try_again_later"
+        ]
+      },
+      "generator": {
+        "cpuPct": 37,
+        "rssMb": 206
+      },
+      "hostFreeRamMb": {
+        "min": 6371,
+        "atStart": 6408
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 30,
+          "cpuMax": 34,
+          "memMaxMb": 7
+        },
+        "server-1": {
+          "cpuAvg": 39,
+          "cpuMax": 47,
+          "memMaxMb": 98
+        },
+        "server-2": {
+          "cpuAvg": 38,
+          "cpuMax": 44,
+          "memMaxMb": 132
+        },
+        "postgres-1": {
+          "cpuAvg": 6,
+          "cpuMax": 14,
+          "memMaxMb": 60
+        },
+        "redis-1": {
+          "cpuAvg": 6,
+          "cpuMax": 9,
+          "memMaxMb": 6
+        }
+      }
+    }
+  ]
+}

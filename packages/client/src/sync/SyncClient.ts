@@ -353,8 +353,9 @@ export class SyncClient {
       case 'peer-leave':
         this.options.presence?.leave(msg.peerId);
         return;
-      case 'cursor':
-        this.options.presence?.cursor(msg.peerId, msg.x, msg.y);
+      case 'cursors':
+        // One batch every 50 ms; our own cursor may be in it (Presence ignores unknown peers).
+        for (const c of msg.cursors) this.options.presence?.cursor(c.peerId, c.x, c.y);
         return;
       case 'select':
         this.options.presence?.select(msg.peerId, msg.ids);

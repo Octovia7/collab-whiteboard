@@ -16,6 +16,9 @@ on:
       measure_ms:
         description: Measurement window per step (ms)
         default: "30000"
+      cursor_ms:
+        description: Cursor interval per bot in ms (0 = cursors off)
+        default: "50"
 
 permissions:
   contents: read
@@ -62,6 +65,7 @@ jobs:
           BOT_STEPS: ${{ inputs.steps }}
           WORKERS: ${{ inputs.workers }}
           MEASURE_MS: ${{ inputs.measure_ms }}
+          CURSOR_MS: ${{ inputs.cursor_ms }}
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -71,7 +75,8 @@ jobs:
           retention-days: 30
       - if: always()
         run: docker compose -f docker-compose.prod.yml --env-file .env.prod logs --no-color > prod-stack.log
-      - if: failure()
+      # Always: when bots get closed, the servers' logs say why.
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: prod-stack-log

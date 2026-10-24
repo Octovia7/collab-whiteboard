@@ -53,14 +53,14 @@ describe('presence', () => {
     expect(rows).toEqual([{ n: 0 }]);
   });
 
-  it('throttles cursors to 20/s, always delivering the final position', async () => {
+  it('throttles cursors to 20/s and batches them per 50 ms, always delivering the final position', async () => {
     const { s, ada, bob, boardId } = await setup();
     const a = await tab(s.port, boardId, ada.cookie, 'adatab');
     const raw = new NodeWebSocket(`ws://127.0.0.1:${s.port}/ws?board=${boardId}`, { headers: { cookie: bob.cookie, origin: ORIGIN } });
-    const cursors: ServerMessage[] = [];
+    const cursors: { x: number; y: number }[] = [];
     raw.on('message', (d) => {
       const m = JSON.parse(String(d)) as ServerMessage;
-      if (m.t === 'cursor') cursors.push(m);
+      if (m.t === 'cursors') for (const c of m.cursors) cursors.push(c);
     });
     await new Promise((r) => raw.once('open', r));
     raw.send(JSON.stringify({ t: 'hello', boardId, lastSeq: 0 }));
