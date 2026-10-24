@@ -101,6 +101,8 @@ export type ClientMessage =
   | { t: 'cursor'; x: number; y: number }
   /** My current selection. */
   | { t: 'select'; ids: string[] }
+  /** I'm editing this note's text (null: stopped). Drives the "someone is typing" soft lock. */
+  | { t: 'typing'; id: string | null }
   /** Heartbeat when nothing else was sent for a while. */
   | { t: 'ping' };
 
@@ -109,6 +111,7 @@ export const clientMessageSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('ops'), ops: z.array(opSchema).min(1).max(LIMITS.maxOpsPerBatch) }),
   z.object({ t: z.literal('cursor'), x: coord, y: coord }),
   z.object({ t: z.literal('select'), ids: z.array(shapeId).max(LIMITS.maxSelectedIds) }),
+  z.object({ t: z.literal('typing'), id: shapeId.nullable() }),
   z.object({ t: z.literal('ping') }),
 ]);
 
@@ -127,7 +130,12 @@ export interface PeerInfo {
 }
 
 export type ServerMessage =
-  | { t: 'welcome'; you: PeerInfo; role: Role; peers: PeerInfo[]; snapshot: BoardSnapshot; seq: number }
+  /**
+   * Reply to hello. Exactly one of `snapshot` (the whole board) or `ops` (catch-up: every op
+   * after the client's lastSeq, applied on top of the board it already has). `seq` is the
+   * highest seq either covers.
+   */
+  | ({ t: 'welcome'; you: PeerInfo; role: Role; peers: PeerInfo[]; seq: number } & ({ snapshot: BoardSnapshot; ops?: undefined } | { ops: Op[]; snapshot?: undefined }))
   | { t: 'ops'; ops: Op[]; seq: number }
   | { t: 'ack'; opIds: string[]; seq: number }
   /** `shape` is the server's current registers for rollback, or null if it has no such shape. */
@@ -136,8 +144,11 @@ export type ServerMessage =
   | { t: 'peer-leave'; peerId: string }
   | { t: 'cursor'; peerId: string; x: number; y: number }
   | { t: 'select'; peerId: string; ids: string[] }
+  | { t: 'typing'; peerId: string; id: string | null }
   /** Your role on this board changed; it applies to your next batch (no reconnect needed). */
   | { t: 'role'; role: Role }
+  /** Reply to a client's ping, so a client can tell a dead connection from a quiet one. */
+  | { t: 'pong' }
   | { t: 'error'; code: string; message: string };
 
 /**
@@ -172,16 +183,21 @@ const seq = z.number().int().min(0);
 const role = z.enum(['owner', 'editor', 'viewer']);
 const peer = z.object({ peerId: z.string(), userId: z.string(), name: z.string().max(200) });
 
-export const serverMessageSchema = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), snapshot: snapshotSchema, seq }),
+// A plain union, not discriminatedUnion: `welcome` has two shapes (snapshot or catch-up ops).
+export const serverMessageSchema = z.union([
+  // Two strict variants: exactly one of snapshot / ops (strict rejects a welcome carrying both).
+  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), seq, snapshot: snapshotSchema }).strict(),
+  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), seq, ops: z.array(opSchema) }).strict(),
   z.object({ t: z.literal('peer-join'), peer }),
   z.object({ t: z.literal('peer-leave'), peerId: z.string() }),
   z.object({ t: z.literal('cursor'), peerId: z.string(), x: coord, y: coord }),
   z.object({ t: z.literal('select'), peerId: z.string(), ids: z.array(z.string()).max(LIMITS.maxSelectedIds) }),
+  z.object({ t: z.literal('typing'), peerId: z.string(), id: z.string().nullable() }),
   z.object({ t: z.literal('ops'), ops: z.array(opSchema), seq }),
   z.object({ t: z.literal('ack'), opIds: z.array(z.string()), seq }),
   z.object({ t: z.literal('reject'), opId: z.string(), reason: z.string(), shape: snapshotShapeSchema.nullable() }),
   z.object({ t: z.literal('role'), role }),
+  z.object({ t: z.literal('pong') }),
   z.object({ t: z.literal('error'), code: z.string(), message: z.string() }),
 ]);
 

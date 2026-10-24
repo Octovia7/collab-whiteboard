@@ -103,6 +103,11 @@ export class Board {
   }
 
   /** One property's current value without materializing the whole shape (hot paths: sorting, culling). */
+  /** Who last wrote this property (and when, in Lamport time); undefined if never written. */
+  propStamp(id: ShapeId, key: PropKey): Stamp | undefined {
+    return this.shapes.get(id)?.regs[key]?.stamp;
+  }
+
   prop<K extends PropKey>(id: ShapeId, key: K): ShapeProps[K] | undefined {
     return this.shapes.get(id)?.regs[key]?.value as ShapeProps[K] | undefined;
   }

@@ -11,6 +11,9 @@ describe('client messages', () => {
     expect(ok({ t: 'ping' })).toBe(true);
     expect(ok({ t: 'cursor', x: 10.5, y: -3 })).toBe(true);
     expect(ok({ t: 'select', ids: ['abc-1', 'abc-2'] })).toBe(true);
+    expect(ok({ t: 'typing', id: 'abc-1' })).toBe(true);
+    expect(ok({ t: 'typing', id: null })).toBe(true);
+    expect(ok({ t: 'typing', id: 'nope' })).toBe(false);
     expect(
       ok({
         t: 'ops',
@@ -66,11 +69,17 @@ describe('server messages', () => {
     expect(okS({ t: 'peer-leave', peerId: 'p1' })).toBe(true);
     expect(okS({ t: 'cursor', peerId: 'p1', x: 1, y: 2 })).toBe(true);
     expect(okS({ t: 'select', peerId: 'p1', ids: ['a-1'] })).toBe(true);
+    expect(okS({ t: 'typing', peerId: 'p1', id: null })).toBe(true);
     expect(okS({ t: 'ack', opIds: ['a:1'], seq: 3 })).toBe(true);
     expect(okS({ t: 'reject', opId: 'a:1', reason: 'unknown_shape', shape: null })).toBe(true);
     expect(okS({ t: 'error', code: 'bad_message', message: 'x' })).toBe(true);
     expect(okS({ t: 'role', role: 'viewer' })).toBe(true);
     expect(okS({ t: 'role', role: 'admin' })).toBe(false);
     expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], snapshot: null, seq: 0 })).toBe(false);
+    // Catch-up form, and never both or neither.
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], ops: [], seq: 7 })).toBe(true);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], ops: [], snapshot: { shapes: [] }, seq: 7 })).toBe(false);
+    expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [], seq: 7 })).toBe(false);
+    expect(okS({ t: 'pong' })).toBe(true);
   });
 });
