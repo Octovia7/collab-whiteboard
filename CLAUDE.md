@@ -26,7 +26,8 @@ pnpm install
 pnpm dev                      # client (Vite) + server (tsx watch) together
 pnpm test                     # all Vitest suites (convergence test with 50 seeds)
 pnpm test:convergence         # randomized convergence test, all 500 seeds (must always pass)
-CONVERGENCE_SEED=42 pnpm test:convergence   # replay one failing seed (CONVERGENCE_SEEDS=n changes the count)
+CONVERGENCE_SEED=42 pnpm test:convergence   # replay one failing seed (CONVERGENCE_SEEDS=n changes the count;
+                              # the run fails at CONVERGENCE_DEADLINE_MS, default 120 s, checked between seeds)
 pnpm test:watch               # Vitest in watch mode
 pnpm test:integration         # Vitest against Docker Postgres (db whiteboard_test)
 pnpm test:e2e                 # Playwright (Chromium); db whiteboard_e2e, server :3101 (tests may kill/restart it), client :5199
@@ -80,7 +81,6 @@ This is a production system, not a demo. These standards are part of each milest
 
 | Limitation | Removed in |
 | --- | --- |
-| Offline edits live only in memory: closing or reloading the tab while offline loses them (no IndexedDB queue) | Stretch goal (IndexedDB offline queue) |
 | Rate limits, socket caps, the snapshot lock and presence (online list, cursors) are per server process (in memory); seq is assigned in memory | M8 (Redis: `rl:ws:*`, `INCR seq`, `snap-lock`, `presence:*` pub/sub, `online:*` hash) |
 | Single server only: no pub/sub between servers, no gap detection | M8 |
 | No share links; members are added by email only | M8 |
@@ -217,5 +217,14 @@ too far behind, ahead of the server, or a tombstone GC after lastSeq) `welcome {
 either way. Clients close the socket on the browser `offline` event ("Offline" badge), reconnect on `online`, and treat
 3 silent heartbeats as a dead socket (server answers `ping` with `pong`). Tombstone GC at snapshot time for tombstones
 older than `TOMBSTONE_TTL_MS` (default 24 h; age from `board_ops.created_at`, carried in the snapshot as `deletedAt`).
-Metrics `catchup_ops`, `welcomes_total{kind}`, `tombstones_collected_total`. The IndexedDB offline queue was not built
-(stretch goal, see Known limitations).
+Metrics `catchup_ops`, `welcomes_total{kind}`, `tombstones_collected_total`.
+
+Stretch goal done and merged (branch `offline-queue`): IndexedDB offline queue (`client/src/sync/OfflineQueue.ts`, plain
+IndexedDB, no wrapper). One queue per tab (`boardId:tabId`, tab ID in sessionStorage); each open tab holds a Web Lock for
+its queue, and a loading tab adopts every queue of this board whose lock is free (its own after a reload, closed tabs');
+queues of another user are deleted; restored ops are stamp-sorted, observed by the clock and applied before tools unlock
+and the socket opens. No service worker, so a reload while offline shows the browser's offline page; the next online load
+sends the queue. E2E simulates an outage as offline mode + refused WebSockets (`routeWebSocket`): offline mode alone
+leaves WebSockets alone and fires `online` in the old page during `page.reload()`.
+Machine note: this Windows box is short of memory (commit ~22/24 GB with the user's apps); run Docker image builds and
+test suites one after the other, never at the same time.

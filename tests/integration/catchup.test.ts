@@ -150,3 +150,33 @@ describe('tombstone GC', () => {
     expect(metrics.body).toMatch(/tombstones_collected_total 1/);
   });
 });
+
+describe('offline queue (restore after a reload)', () => {
+  it('restored ops reach the server and other tabs, the clock moves past them, and the queue empties on ack', async () => {
+    const { s, ada, bob, boardId } = await setup();
+    const peer = await tab(s.port, boardId, bob.cookie, 'peer');
+    // What an earlier page load of Ada's tab left in the queue: a create and a later move,
+    // stamped far ahead of anything this new load has seen.
+    const before = new BoardStore('oldload');
+    const create = before.makeCreate({ type: 'rect', x: 0, y: 0, w: 50, h: 50, color: 'black' });
+    before.clock.observe({ t: 1000, client: 'x' });
+    const move = before.makeUpdate(create.shape.id, { x: 300 });
+    const saves: number[] = [];
+    const reloaded = await tab(s.port, boardId, ada.cookie, 'newload', {
+      restored: [create, move],
+      queue: { save: (ops) => saves.push(ops.length) },
+    });
+    await waitFor(() => peer.store.get(create.shape.id)?.x === 300, 'the peer to get the restored edits');
+    await waitFor(() => settled(reloaded), 'acks');
+    expect(saves[0]).toBe(2); // saved again under this load's queue right away
+    expect(saves.at(-1)).toBe(0); // and emptied once acked
+    // An edit made now wins over the restored one: the clock observed its stamp.
+    reloaded.store.submit([reloaded.store.makeUpdate(create.shape.id, { x: 10 })]);
+    await waitFor(() => peer.store.get(create.shape.id)?.x === 10, 'the new edit to win');
+    // Restoring the same ops again (a second adopter) changes nothing: the server dedupes by opId.
+    const again = await tab(s.port, boardId, ada.cookie, 'dup', { restored: [create, move] });
+    await waitFor(() => settled(again), 'acks for the duplicates');
+    const rows = await query<{ n: string }>(DB_URL, 'select count(*) as n from board_ops where board_id = $1 and op_id = any($2)', [boardId, [create.opId, move.opId]]);
+    expect(Number(rows[0]?.n)).toBe(2);
+  });
+});

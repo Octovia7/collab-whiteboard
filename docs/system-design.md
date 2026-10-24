@@ -76,7 +76,7 @@ TypeScript everywhere, so the sync logic (stamps, LWW merge, op types) is writte
 | Frontend | React 18 + Vite | Toolbar, panels, dialogs; the board itself is canvas |
 | Drawing | Raw Canvas 2D | Fast, full control, nothing hidden |
 | Client state | Plain classes + a tiny event emitter | The board store changes 60×/s; React state would re-render too much |
-| Offline queue | IndexedDB via `idb-keyval` | Stretch goal |
+| Offline queue | IndexedDB (plain API) + Web Locks | Unacked ops survive a reload or a closed tab. Three IndexedDB calls don't need a wrapper library |
 | Server | Node.js 22 + Fastify | REST API |
 | WebSockets | `ws` library on the same Fastify server | Plain, fast, no Socket.io magic to hide behind |
 | Validation | Zod | Every incoming message is parsed and checked |
@@ -230,6 +230,15 @@ type Op =
 
 **Catch-up on reconnect.** `hello` carries the highest `seq` the client has applied. Each room keeps the ops after its previous snapshot in memory (the same range Postgres still has). If that log covers `lastSeq`, `welcome` carries `ops` (only what was missed, applied on top of the client's existing board, then the client resends its pending ops); otherwise `welcome` carries a full `snapshot`, onto which the client reapplies its pending ops. A snapshot is also sent on a first join (`lastSeq = 0`), when `lastSeq` is ahead of the server, and when tombstones were garbage-collected after `lastSeq` (the client may still hold one no op will ever mention again). Browsers close the socket on the `offline` event and reconnect on `online`.
 
+**Offline queue** (`client/src/sync/OfflineQueue.ts`). Every time the set of unacked ops changes, the client writes it to IndexedDB (write-behind: at most one write in flight, the newest set always lands; an empty set deletes the record). Rules:
+
+- One queue per tab: the key is `boardId:tabId`, with the tab ID in `sessionStorage` (it survives a reload of that tab and differs between tabs), so two tabs on one board never overwrite each other's queue. A duplicated tab, which copies `sessionStorage`, notices its ID is taken and picks a new one.
+- Each open tab holds a Web Lock (`navigator.locks`) named after its queue; the browser releases it when the tab closes or reloads. On load, a tab takes its own lock, then adopts every queue for this board whose lock it can take (its own from before the reload, and those of closed tabs). It writes the adopted ops into its own queue before deleting the orphans' records, so a crash in between leaves duplicates, never a loss. Duplicates are harmless: the server dedupes by `opId`.
+- Each queue stores its `userId`; a queue left by a different user is deleted, never sent.
+- Restored ops are sorted by stamp (creates come before later edits of the same shape), the clock observes every stamp, and they are applied and queued before the tab can edit or connect: the UI stays read-only until then. They go out with the first `welcome`.
+- A queue is cleared when the board is deleted (4004) or the user is removed from it (4003); after a policy violation (1008) it stays, and a reload sends it.
+- No service worker: a reload while offline shows the browser's offline page. The queue survives it, and the next load of the board, once online, sends the ops.
+
 **Presence identity.** Presence is per connection, not per user: every socket gets a server-assigned `peerId`, sent with its `userId` and display name. The same person with two tabs open shows two cursors (one per tab), while online lists group entries by `userId`, so they appear once. Peers are dropped when their socket closes or after 15 s without any message (clients send `ping` every 5 s when idle).
 
 **Close codes.** After a socket has been accepted, the server closes it with: `1008` for a protocol violation (malformed message, ops before `hello`), `4003` when the user was removed from the board, `4004` when the board was deleted. The client never reconnects after these; any other close (network drop, server restart, `1012` service restart) is retried with backoff. Authentication failures happen earlier, as HTTP 401/403 on the upgrade, so no socket exists to close.
@@ -382,8 +391,8 @@ The design rule is simple: an op is safe once the client has an ack, and anythin
 | Failure | What happens | Recovery |
 | --- | --- | --- |
 | Client Wi-Fi drops for seconds | Socket closes; user keeps drawing locally | Reconnect with backoff, `hello { lastSeq }`, receive missed ops, resend pending ops |
-| Client offline for a long time | Pending queue grows (IndexedDB if the stretch goal is built) | Same as above; if too far behind, server sends a fresh snapshot and the client reapplies its pending ops on top |
-| Browser tab closed with unacked ops | Those ops are lost unless saved in IndexedDB | Acceptable for v1; the window is about 100 ms of work |
+| Client offline for a long time | Pending queue grows, also saved in IndexedDB | Same as above; if too far behind, server sends a fresh snapshot and the client reapplies its pending ops on top |
+| Browser tab closed or reloaded with unacked ops | They stay in the tab's IndexedDB queue, whose Web Lock the browser releases | The next load of the board (that tab after a reload, or any new tab) adopts the queue and sends the ops; the server dedupes by `opId` |
 | Server process crashes | Sockets drop; unflushed OpWriter batch is lost | Those ops were never acked, so clients resend them to whichever server they reconnect to |
 | Server restarts / deploys | Rooms unload | Rooms reload from snapshot + op log on first `hello` |
 | Redis restarts | Pub/sub drops messages for a moment; `seq` counter may be lost | On startup, servers set `seq:{id}` to `MAX(seq)` from Postgres; clients catch up by `lastSeq` on reconnect |

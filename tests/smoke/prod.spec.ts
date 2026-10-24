@@ -65,6 +65,8 @@ test('sign up, draw, reload: the shape persists on the production stack', async 
   await page.mouse.move(460, 400, { steps: 8 });
   await page.mouse.up();
   await expect.poll(() => inkAt(page, 300, 350)).toBe(true); // left edge
+  // The offline queue opened under the production CSP (it saves unacked ops as they're made).
+  await expect.poll(() => page.evaluate(async () => (await indexedDB.databases()).map((d) => d.name))).toContain('whiteboard-offline');
 
   // A freehand stroke with the pen, below the rectangle.
   await page.getByRole('button', { name: 'Pen', exact: true }).click();

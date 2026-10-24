@@ -13,6 +13,8 @@ import { Rng } from './random';
 const CLIENTS = 5;
 const ROUNDS = 1000;
 const SEEDS = Number(process.env.CONVERGENCE_SEEDS ?? 50);
+/** The whole run must finish in this (500 seeds take ~12 s on a dev machine). */
+const DEADLINE_MS = Number(process.env.CONVERGENCE_DEADLINE_MS ?? 120_000);
 const ONLY_SEED = process.env.CONVERGENCE_SEED;
 
 const TYPES: ShapeType[] = ['rect', 'ellipse', 'arrow', 'stroke', 'note'];
@@ -188,7 +190,13 @@ describe('convergence', () => {
   it(`${CLIENTS} clients x ${ROUNDS} random ops converge for ${ONLY_SEED ? `seed ${ONLY_SEED}` : `${SEEDS} seeds`}`, () => {
     const seeds = ONLY_SEED ? [Number(ONLY_SEED)] : Array.from({ length: SEEDS }, (_, i) => i + 1);
     const stats = newStats();
+    const started = performance.now();
     for (const seed of seeds) {
+      // Vitest's timeout can't interrupt a synchronous loop (it only reports after the loop
+      // ends), so check our own deadline between seeds: a stall fails within one seed of it.
+      if (performance.now() - started > DEADLINE_MS) {
+        throw new Error(`convergence run exceeded ${DEADLINE_MS / 1000} s at seed ${seed} of ${seeds.length} (stalled or too slow)`);
+      }
       const { clients } = simulate(seed, stats);
       const reference = (clients[0] as SimClient).board.snapshot();
       const referenceJson = JSON.stringify(reference);
@@ -210,7 +218,7 @@ describe('convergence', () => {
       expect(stats.lateAppendsAfterFinalize, 'appends arriving after pen-up').toBeGreaterThan(0);
       expect(stats.duplicates, 'duplicate deliveries').toBeGreaterThan(0);
     }
-  }, 120_000);
+  }, DEADLINE_MS + 10_000);
 
   it('the same op log applied in any order, with duplicates, gives the same board', () => {
     for (let seed = 1; seed <= 20; seed++) {
