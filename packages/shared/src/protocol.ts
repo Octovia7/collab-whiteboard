@@ -132,12 +132,20 @@ export interface PeerInfo {
 export type ServerMessage =
   /**
    * Reply to hello. Exactly one of `snapshot` (the whole board) or `ops` (catch-up: every op
-   * after the client's lastSeq, applied on top of the board it already has). `seq` is the
-   * highest seq either covers.
+   * after the client's lastSeq, applied on top of the board it already has).
+   *
+   * `upTo` on welcome, ops and ack is the server's watermark: every op with seq <= upTo has
+   * been delivered to this socket (system-design.md, "The upTo watermark"). Ops themselves
+   * arrive in any seq order; clients store the latest upTo as their lastSeq.
    */
-  | ({ t: 'welcome'; you: PeerInfo; role: Role; peers: PeerInfo[]; seq: number } & ({ snapshot: BoardSnapshot; ops?: undefined } | { ops: Op[]; snapshot?: undefined }))
-  | { t: 'ops'; ops: Op[]; seq: number }
-  | { t: 'ack'; opIds: string[]; seq: number }
+  | ({ t: 'welcome'; you: PeerInfo; role: Role; peers: PeerInfo[]; upTo: number } & ({ snapshot: BoardSnapshot; ops?: undefined } | { ops: Op[]; snapshot?: undefined }))
+  | { t: 'ops'; ops: Op[]; upTo: number }
+  | { t: 'ack'; opIds: string[]; upTo: number }
+  /**
+   * Postgres has been failing long enough that this server stopped accepting ops (paused), or
+   * it recovered. Batches sent while paused are dropped unapplied; resend them on resume.
+   */
+  | { t: 'saving'; paused: boolean }
   /** `shape` is the server's current registers for rollback, or null if it has no such shape. */
   | { t: 'reject'; opId: string; reason: string; shape: SnapshotShape | null }
   | { t: 'peer-join'; peer: PeerInfo }
@@ -158,6 +166,8 @@ export type ServerMessage =
  */
 export const CLOSE = {
   policyViolation: 1008,
+  /** The session was logged out (in any tab, on any server). */
+  loggedOut: 4001,
   removedFromBoard: 4003,
   boardDeleted: 4004,
 } as const;
@@ -165,6 +175,9 @@ export const FINAL_CLOSE_CODES: readonly number[] = Object.values(CLOSE);
 
 /** Graceful server shutdown: reconnect right away (with a little jitter) instead of backing off. */
 export const SERVICE_RESTART = 1012;
+
+/** The server can't sequence ops right now (Redis unreachable): reconnect with backoff and resend. */
+export const TRY_AGAIN_LATER = 1013;
 
 /** No message (not even a heartbeat) for PRESENCE.timeoutMs: probably a dead connection. Retried. */
 export const HEARTBEAT_TIMEOUT = 4000;
@@ -179,22 +192,23 @@ const snapshotShapeSchema = z.custom<SnapshotShape>(
   (v) => typeof v === 'object' && v !== null && typeof (v as { id?: unknown }).id === 'string',
   'invalid shape',
 );
-const seq = z.number().int().min(0);
+const upTo = z.number().int().min(0);
 const role = z.enum(['owner', 'editor', 'viewer']);
 const peer = z.object({ peerId: z.string(), userId: z.string(), name: z.string().max(200) });
 
 // A plain union, not discriminatedUnion: `welcome` has two shapes (snapshot or catch-up ops).
 export const serverMessageSchema = z.union([
   // Two strict variants: exactly one of snapshot / ops (strict rejects a welcome carrying both).
-  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), seq, snapshot: snapshotSchema }).strict(),
-  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), seq, ops: z.array(opSchema) }).strict(),
+  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), upTo, snapshot: snapshotSchema }).strict(),
+  z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), upTo, ops: z.array(opSchema) }).strict(),
   z.object({ t: z.literal('peer-join'), peer }),
   z.object({ t: z.literal('peer-leave'), peerId: z.string() }),
   z.object({ t: z.literal('cursor'), peerId: z.string(), x: coord, y: coord }),
   z.object({ t: z.literal('select'), peerId: z.string(), ids: z.array(z.string()).max(LIMITS.maxSelectedIds) }),
   z.object({ t: z.literal('typing'), peerId: z.string(), id: z.string().nullable() }),
-  z.object({ t: z.literal('ops'), ops: z.array(opSchema), seq }),
-  z.object({ t: z.literal('ack'), opIds: z.array(z.string()), seq }),
+  z.object({ t: z.literal('ops'), ops: z.array(opSchema), upTo }),
+  z.object({ t: z.literal('ack'), opIds: z.array(z.string()), upTo }),
+  z.object({ t: z.literal('saving'), paused: z.boolean() }),
   z.object({ t: z.literal('reject'), opId: z.string(), reason: z.string(), shape: snapshotShapeSchema.nullable() }),
   z.object({ t: z.literal('role'), role }),
   z.object({ t: z.literal('pong') }),
