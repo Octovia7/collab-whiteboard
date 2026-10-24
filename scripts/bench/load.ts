@@ -79,8 +79,8 @@ type ParentMsg =
   | { cmd: 'measure'; on: boolean }
   | { cmd: 'stop' };
 type WorkerMsg =
-  | { type: 'added'; bots: { index: number; peerId: string }[]; failed: string[] }
-  | ({ type: 'result'; same: HistData; cross: HistData; cpuMs: number; wallMs: number; rssMb: number } & Counters)
+  | { type: 'added'; bots: { index: number; peerId: string }[]; failed: string[]; closes: string[] }
+  | ({ type: 'result'; same: HistData; cross: HistData; cpuMs: number; wallMs: number; rssMb: number; alive: number; closes: string[] } & Counters)
   | { type: 'error'; message: string };
 
 // ===================================================================== worker
@@ -103,6 +103,9 @@ function runWorker(): void {
   let counters = zero();
   let cpuStart = process.cpuUsage();
   let wallStart = performance.now();
+  /** Every socket the stack closed since the start (code and reason), measuring or not. */
+  const closes: string[] = [];
+  let stopping = false;
   const send = (m: WorkerMsg) => process.send?.(m);
 
   async function addBot(index: number, token: string, boardId: string): Promise<Bot> {
@@ -123,8 +126,9 @@ function runWorker(): void {
         reject(new Error(`upgrade refused: ${res.statusCode}`));
       });
       ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', boardId, lastSeq: 0 })));
-      ws.on('close', () => {
+      ws.on('close', (code, reason) => {
         counters.closed++;
+        if (!stopping) closes.push(`bot ${index}: ${code} ${reason.toString() || '(no reason)'}`);
         for (const timer of bot.timers) clearInterval(timer);
       });
       ws.on('message', (raw) => {
@@ -195,7 +199,7 @@ function runWorker(): void {
               }
             }
             bots.push(...added);
-            send({ type: 'added', bots: added.map((b) => ({ index: b.index, peerId: b.peerId })), failed });
+            send({ type: 'added', bots: added.map((b) => ({ index: b.index, peerId: b.peerId })), failed, closes: [...closes] });
             return;
           }
           case 'map':
@@ -221,10 +225,13 @@ function runWorker(): void {
                 cpuMs: (cpu.user + cpu.system) / 1000,
                 wallMs: performance.now() - wallStart,
                 rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+                alive: bots.filter((b) => b.ws.readyState === b.ws.OPEN).length,
+                closes: [...closes],
               });
             }
             return;
           case 'stop':
+            stopping = true;
             for (const b of bots) b.ws.close();
             setTimeout(() => process.exit(0), 500);
             return;
@@ -248,7 +255,7 @@ interface StepResult {
   all: Lat;
   opsPerSec: { sent: number; acked: number; expected: number };
   deliveriesPerSec: number;
-  problems: { rejected: number; closed: number; saving: number; refused: number };
+  problems: { rejected: number; closed: number; saving: number; refused: number; aliveAtEnd: number; closesSoFar: string[] };
   generator: { cpuPct: number; rssMb: number };
   hostFreeRamMb: { min: number; atStart: number };
   containers: Record<string, { cpuAvg: number; cpuMax: number; memMaxMb: number }>;
@@ -302,15 +309,23 @@ async function runParent(): Promise<void> {
     const connectStart = performance.now();
     perWorker.forEach((idx, wi) => workers[wi]?.send({ cmd: 'add', indexes: idx, token, boardId } satisfies ParentMsg));
     const failed: string[] = [];
+    const closedWhileConnecting: string[] = [];
     for (let wi = 0; wi < WORKERS; wi++) {
       const added = await next(wi, 'added');
       for (const b of added.bots) peerOf.set(b.index, b.peerId);
       failed.push(...added.failed);
+      closedWhileConnecting.push(...added.closes);
     }
     total = peerOf.size;
     console.log(`\n${total} bots connected (+${indexes.length - failed.length} in ${Math.round((performance.now() - connectStart) / 1000)} s)`);
     if (failed.length > 0) {
       stoppedEarly = `at ${target} bots: ${failed.length} bots could not connect (${[...new Set(failed)].join('; ')})`;
+      break;
+    }
+    // A bot the stack closed (between steps too, e.g. while others were signing up) would make
+    // the next measurement look lighter than it is: stop instead, and say why.
+    if (closedWhileConnecting.length > 0) {
+      stoppedEarly = `at ${target} bots: the stack closed ${closedWhileConnecting.length} sockets (${closedWhileConnecting.slice(0, 5).join('; ')})`;
       break;
     }
 
@@ -343,7 +358,8 @@ async function runParent(): Promise<void> {
     const same = new Histogram();
     const cross = new Histogram();
     const all = new Histogram();
-    const c = { sent: 0, acked: 0, rejected: 0, closed: 0, saving: 0, refused: 0, cpuMs: 0, wallMs: 0, rssMb: 0 };
+    const c = { sent: 0, acked: 0, rejected: 0, closed: 0, saving: 0, refused: 0, cpuMs: 0, wallMs: 0, rssMb: 0, alive: 0 };
+    const allCloses: string[] = [];
     for (let wi = 0; wi < WORKERS; wi++) {
       const r = await next(wi, 'result');
       same.merge(r.same);
@@ -358,6 +374,8 @@ async function runParent(): Promise<void> {
       c.refused += r.refused;
       c.cpuMs += r.cpuMs;
       c.rssMb += r.rssMb;
+      c.alive += r.alive;
+      allCloses.push(...r.closes);
       c.wallMs = Math.max(c.wallMs, r.wallMs);
     }
     const secs = c.wallMs / 1000;
@@ -378,7 +396,7 @@ async function runParent(): Promise<void> {
       all: summary(all),
       opsPerSec: { sent: Math.round(c.sent / secs), acked: Math.round(c.acked / secs), expected: Math.round((total * 1000) / MOVE_MS) },
       deliveriesPerSec: Math.round(all.count / secs),
-      problems: { rejected: c.rejected, closed: c.closed, saving: c.saving, refused: c.refused },
+      problems: { rejected: c.rejected, closed: c.closed, saving: c.saving, refused: c.refused, aliveAtEnd: c.alive, closesSoFar: allCloses.slice(0, 20) },
       generator: { cpuPct: Math.round((c.cpuMs / c.wallMs) * 100), rssMb: c.rssMb },
       hostFreeRamMb: { min: freeMin, atStart: freeAtStart },
       containers: containersStats,
@@ -393,8 +411,8 @@ async function runParent(): Promise<void> {
     console.log(`  generator CPU ${result.generator.cpuPct}% (100 = one core), RSS ${result.generator.rssMb} MB; host free RAM min ${freeMin} MB`);
 
     const p = result.problems;
-    if (p.rejected || p.closed || p.saving || p.refused) {
-      stoppedEarly = `after ${total} bots: the stack rejected ${p.rejected} ops, closed ${p.closed} sockets, refused ${p.refused}, sent saving ${p.saving}`;
+    if (p.rejected || p.closed || p.saving || p.refused || p.aliveAtEnd < total) {
+      stoppedEarly = `after ${total} bots: the stack rejected ${p.rejected} ops, closed ${p.closed} sockets (${p.aliveAtEnd} of ${total} still open; ${p.closesSoFar.slice(0, 3).join('; ')}), refused ${p.refused}, sent saving ${p.saving}`;
       break;
     }
     if (freeMin < MIN_FREE_MB) {
