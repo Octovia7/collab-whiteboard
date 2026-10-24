@@ -4,7 +4,7 @@ A real-time multiplayer whiteboard, a small Excalidraw/Miro. Several people draw
 
 The point of the project is the sync engine and the backend. Conflict resolution, the op log, catch-up, multi-server fan-out and the canvas scene are all written from scratch: no Yjs, Automerge, Liveblocks, Socket.io, Konva or Fabric.js.
 
-**Live demo:** _not deployed yet (milestone 10)._
+**Live demo:** _not deployed yet (milestone 10)._ The demo runs on free tiers with real limits; see [Live demo limits](#live-demo-limits).
 
 ## Features
 
@@ -142,6 +142,14 @@ Each client also creates a marker shape every second. Creates are never overwrit
 - **Playwright's offline mode passed offline tests the queue never handled.** The offline-queue tests (go offline, draw, reload while offline, come back) passed at first, without the queue doing anything. Playwright's offline mode doesn't block WebSockets, and during `page.reload()` it briefly fires `online` in the old page. That page then reconnected and sent its edits just before unloading. The tests now simulate a real outage (offline mode plus refused WebSocket connections) and assert how many ops the reopened tab restored from IndexedDB. A version of the feature that never restored anything now fails.
 - **The first load test on GitHub dropped bots without noticing.** It counted closed sockets only while measuring, so bots that died between steps went unnoticed and the 50- and 100-editor numbers looked better than they were. The script now stops the ramp as soon as the stack closes any socket, and those numbers were thrown out.
 - **A chaos run reported every board as diverged when they weren't.** The boards differed only in the key order of JSON loaded back from Postgres JSONB. The comparison now sorts keys.
+
+## Live demo limits
+
+The public demo runs on free tiers (Render + Neon; setup in [docs/deploy.md](docs/deploy.md)), so it is much smaller than the benchmarked stack:
+
+- **One server replica on 0.1 CPU and 512 MB.** It handles a few people per board, not 50. Sign-ups take a few seconds (bcrypt at cost 12).
+- **It sleeps after 15 minutes without traffic.** The first visit after that waits about a minute. Saved boards are not affected.
+- **Redis (Render Key Value) is in memory only.** If it restarts, logged-out sessions are forgotten until they expire (up to 7 days). A session cookie someone copied before you logged out would work again until then. The cookie is httpOnly and is deleted from your browser at logout, so this needs a stolen cookie. The full stack's Redis persists to disk and doesn't have this gap. Rate-limit counters also reset. Sequence counters are lost safely (the seq floor, chaos-tested).
 
 ## Repository layout
 

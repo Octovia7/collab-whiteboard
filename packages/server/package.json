@@ -17,6 +17,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/jwt": "^9.1.0",
     "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^10.1.7",
     "@whiteboard/shared": "workspace:*",
     "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.44.7",
