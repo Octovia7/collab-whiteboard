@@ -751,7 +751,7 @@ At most 500 ops are replayed, so load time stays flat however old the board is.
 
 ### 12b. Catch-up and offline sync
 
-Each client remembers `lastSeq`, the highest server sequence it has applied.
+Each client remembers `lastSeq`. It is not the highest seq it has seen but the server's watermark `upTo`, sent on every `ops`, `ack` and `welcome`: the highest seq up to which that server has delivered every op. With several servers, ops can reach a server out of seq order (11 might arrive after 12), and a client that remembered 12 would never be sent 11 again. The server delivers 12 at once anyway (LWW doesn't care about order) and only holds the watermark back until 11 arrives or is read from Postgres.
 
 **Short disconnect (Wi-Fi blip):** on reconnect, send `hello { boardId, lastSeq }`. The server replies with every op where `seq > lastSeq`. The client applies them, then resends its pending queue. The server can answer from memory: each room keeps the ops since its previous snapshot (the range Postgres still holds), and clients from before that, or from before a tombstone GC, get a snapshot instead.
 
@@ -765,7 +765,15 @@ Each client remembers `lastSeq`, the highest server sequence it has applied.
 
 **The multi-server problem.** With two servers behind a load balancer, Rudraksh may connect to Server A and Priya to Server B while on the same board. A's local room doesn't include Priya.
 
-**Option 1: Redis pub/sub (what we build).** Each server publishes every accepted op to channel `board:{id}` and subscribes to the channels of boards it has users for. When a message arrives from Redis, it forwards it to its local sockets. To assign `seq` consistently across servers, use Redis `INCR seq:{boardId}`, which is atomic.
+**Option 1: Redis pub/sub (what we build).** Each server publishes every accepted op to channel `board:{id}` and subscribes to the channels of boards it has users for. When a message arrives from Redis, it forwards it to its local sockets immediately. To assign `seq` consistently across servers, use Redis `INCRBY seq:{boardId} n`, which is atomic (wrapped in a small Lua script that never lets the counter go below the highest seq the room has seen, in case Redis lost it).
+
+How the pieces fit (decisions made in milestone 8):
+
+- **No hold-back, a watermark instead.** Ops are delivered the moment a server has them, in any order. Each server tracks `upTo`, the highest seq it has delivered contiguously, and sends it on every message; clients store it as `lastSeq`. A missing seq is read from Postgres every 250 ms; after 5 s it's a hole (its server crashed before publishing) and the watermark moves past it. A lost pub/sub message therefore never delays anyone's live edits; it only delays the watermark until Postgres has the op.
+- **A server that is behind fills in before `welcome`.** A client reconnecting to another server may have a `lastSeq` ahead of that server's watermark. The room reads the missing seqs from Postgres first (up to 6 s), so the client's own just-acked shapes exist there before it sends edits to them.
+- **Resends across servers** are acked once the op is in Postgres, or treated as new if it never appears (its server died before committing).
+- **Presence** goes over `presence:{id}`; the online list is a Redis hash per connection, swept like heartbeats.
+- **Rate limits and socket caps** are Redis token buckets and hashes, so a user can't get 5 sockets on each of two servers.
 
 **Option 2: one owner server per board (describe in interviews).** Route all users of a board to the same server using **consistent hashing** on the board ID. That server holds the board in memory, assigns `seq` locally, and owns persistence. Fewer moving parts per op and faster, but you need routing logic and a handover when a server dies. When servers are added or removed, consistent hashing moves only about 1/N of the boards instead of reshuffling all of them.
 

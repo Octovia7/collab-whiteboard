@@ -195,7 +195,7 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 
 | `t` | Payload | Meaning |
 | --- | --- | --- |
-| `hello` | `boardId, lastSeq` | Join a board; `lastSeq = 0` on first load |
+| `hello` | `boardId, lastSeq` | Join a board; `lastSeq` is the last `upTo` the client received (`0` on first load) |
 | `ops` | `ops: Op[]` (each with `opId`, `stamp`) | A batch of create / update / delete / append ops |
 | `cursor` | `x, y` (world) | Pointer position, max 20/s |
 | `select` | `ids: string[]` | Current selection |
@@ -206,9 +206,10 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 
 | `t` | Payload | Meaning |
 | --- | --- | --- |
-| `welcome` | `you, role, peers[]` + either `snapshot, seq` or `ops[]` (catch-up) | Reply to `hello`; `you` and each peer are `{ peerId, userId, name }` |
-| `ops` | `ops: Op[], seq` | Ops from other users, with the highest seq included |
-| `ack` | `opIds[], seq` | Your ops were accepted and logged |
+| `welcome` | `you, role, peers[], upTo` + either `snapshot` or `ops[]` (catch-up) | Reply to `hello`; `you` and each peer are `{ peerId, userId, name }`. Peers come from every server |
+| `ops` | `ops: Op[], upTo` | Ops from other users, delivered as soon as this server has them (in any seq order) |
+| `ack` | `opIds[], upTo` | Your ops were accepted and committed to Postgres |
+| `saving` | `paused: boolean` | Postgres has been failing for 30 s: this server stops accepting ops (`true`) until a commit succeeds again (`false`). Edits stay pending; on `false` the client resends them |
 | `reject` | `opId, reason, shape` | Op refused; `shape` is the server's stored registers for that shape (values *with* their stamps, in snapshot form) or `null` if the server has no such shape. See "Rollback" below |
 | `peer-join` / `peer-leave` | `peer { peerId, userId, name }` / `peerId` | Online list changes |
 | `cursor` / `select` | `peerId, …` | Other users' presence |
@@ -228,7 +229,11 @@ type Op =
 // append: `chunk` is the author's per-stroke chunk number (0, 1, 2...); see algorithms.md §7a
 ```
 
-**Catch-up on reconnect.** `hello` carries the highest `seq` the client has applied. Each room keeps the ops after its previous snapshot in memory (the same range Postgres still has). If that log covers `lastSeq`, `welcome` carries `ops` (only what was missed, applied on top of the client's existing board, then the client resends its pending ops); otherwise `welcome` carries a full `snapshot`, onto which the client reapplies its pending ops. A snapshot is also sent on a first join (`lastSeq = 0`), when `lastSeq` is ahead of the server, and when tombstones were garbage-collected after `lastSeq` (the client may still hold one no op will ever mention again). Browsers close the socket on the `offline` event and reconnect on `online`.
+**The `upTo` watermark.** Every `ops`, `ack` and `welcome` carries `upTo`: the highest seq up to which this server has delivered every op to its sockets, with no gaps (a seq missing for 5 s is skipped as a hole, see "Gap detection"). Clients store the latest `upTo` they received as their `lastSeq`; they never look at op seqs and need no gap detection of their own. Delivery itself is never held back: ops reach sockets the moment the server has them, in whatever order, because LWW converges in any delivery order. Only catch-up depends on order, and the watermark is what makes it safe: a client that saw seq 12 but not 11 still has `lastSeq` 10 or less, so catch-up resends 11.
+
+**Catch-up on reconnect.** `hello` carries the client's `lastSeq` (its last `upTo`). Each room keeps the ops after its previous snapshot in memory (the same range Postgres still has). If that log covers `lastSeq`, `welcome` carries `ops` (only what was missed, applied on top of the client's existing board, then the client resends its pending ops); otherwise `welcome` carries a full `snapshot`, onto which the client reapplies its pending ops. A snapshot is also sent on a first join (`lastSeq = 0`), when `lastSeq` is still ahead of this server after it tried to fill in (below), and when tombstones were garbage-collected after `lastSeq` (the client may still hold one no op will ever mention again). Browsers close the socket on the `offline` event and reconnect on `online`.
+
+A client can reconnect to a different server whose watermark is behind its `lastSeq` (that server hasn't received some ops through Redis yet). Before sending `welcome`, the room reads the missing seqs from Postgres and waits for its watermark to reach `lastSeq`, up to 6 s. Without this, the client's next edit to a shape it created on the other server could be rejected as `unknown_shape`, and the shape would vanish from its screen until the op arrived.
 
 **Offline queue** (`client/src/sync/OfflineQueue.ts`). Every time the set of unacked ops changes, the client writes it to IndexedDB (write-behind: at most one write in flight, the newest set always lands; an empty set deletes the record). Rules:
 
@@ -241,14 +246,14 @@ type Op =
 
 **Presence identity.** Presence is per connection, not per user: every socket gets a server-assigned `peerId`, sent with its `userId` and display name. The same person with two tabs open shows two cursors (one per tab), while online lists group entries by `userId`, so they appear once. Peers are dropped when their socket closes or after 15 s without any message (clients send `ping` every 5 s when idle).
 
-**Close codes.** After a socket has been accepted, the server closes it with: `1008` for a protocol violation (malformed message, ops before `hello`), `4003` when the user was removed from the board, `4004` when the board was deleted. The client never reconnects after these; any other close (network drop, server restart, `1012` service restart) is retried with backoff. Authentication failures happen earlier, as HTTP 401/403 on the upgrade, so no socket exists to close.
+**Close codes.** After a socket has been accepted, the server closes it with: `1008` for a protocol violation (malformed message, ops before `hello`), `4001` when the session was logged out (from any tab, on any server), `4003` when the user was removed from the board, `4004` when the board was deleted. `1013` (try again later) when the server can't reach Redis to sequence ops: that one is retried. The client never reconnects after these; any other close (network drop, server restart, `1012` service restart) is retried with backoff. Authentication failures happen earlier, as HTTP 401/403 on the upgrade, so no socket exists to close.
 
 **Rollback.** The rejected op was applied optimistically with a fresh stamp, newer than anything the server holds, so merging the server's values with LWW would keep the bad value. The client instead overwrites that one shape with the server's registers (or removes it if `shape` is `null`). It then re-applies its other still-unacked ops for the same shape, because the server's copy predates them (they may have been sent later in the same batch). If one of those is rejected too, its own reject rolls it back in turn.
 
 **Sizes and limits**
 
 - Max message size 256 KB; max 100 ops per batch; max 2,000 points per stroke append.
-- A client sending more than 200 ops/s is throttled, then disconnected.
+- A client sending more than 200 ops/s is throttled, then disconnected. The budget is per user across all servers (a token bucket in Redis), as is the cap of 5 open sockets.
 - Coordinates are rounded to 2 decimals before sending to keep messages small.
 
 **Why JSON and not binary:** easy to debug in DevTools. MessagePack is the easy upgrade later, typically 30–50% smaller.
@@ -266,9 +271,9 @@ Each server process keeps an in-memory **Room** per active board: the board stat
 **Op pipeline (per incoming `ops` batch)**
 
 1. **Parse** with Zod; malformed → `error` and close.
-2. **Authorize:** the socket's role must be owner or editor; viewers get `reject`.
+2. **Authorize:** the socket's role must be owner or editor; viewers get `reject`. While saving is paused (see "Postgres slow or down"), the batch is dropped unapplied: no ack and no reject, so the client keeps it pending.
 3. **Validate:** shape IDs exist for updates and appends, otherwise `reject` (the server never buffers ops waiting for a create; only clients do); sizes within limits; `append` only by the stroke's creator.
-4. **Sequence:** `INCRBY seq:{boardId} n` in Redis reserves n sequence numbers in one call.
+4. **Sequence:** one Redis call reserves n sequence numbers (a Lua script around `INCRBY seq:{boardId} n` that first raises the counter to the highest seq this room has seen, so a lost or reset counter never hands out a used seq). Replies come back in request order, so batches from one socket still apply in order. The batch is validated again after the await; an op that fails then is rejected and its seq is published as a `skip`, so no server waits 5 s for it.
 5. **Apply** to the room's in-memory board (LWW from `shared`).
 6. **Persist:** hand to OpWriter; wait for the batched INSERT to commit.
 7. **Ack** the sender with the op IDs and highest seq.
@@ -278,16 +283,21 @@ Waiting for the commit before acking (step 6 → 7) is what makes "no acknowledg
 
 **OpWriter** collects ops from all rooms and flushes every 50 ms or 200 ops as one multi-row INSERT, then resolves the waiting acks. One INSERT per 50 ms instead of one per op keeps Postgres load low.
 
-**Receiving from Redis:** a server ignores messages it published itself (each message carries `serverId`), applies the rest to its local room with LWW and forwards them to its local sockets. Every server's copy of a board converges for the same reason clients do.
+**Receiving from Redis:** a server ignores messages it published itself (each message carries `serverId`), applies the rest to its local room with LWW and forwards them to its local sockets right away. Every server's copy of a board converges for the same reason clients do. Messages on `board:{id}`: `ops` (with each op's seq and author), `skip` (reserved seqs that will never have an op), `role` / `removed` / `deleted` (REST changes that must reach sockets on every server).
+
+**Resends that land on another server.** A client whose ack was lost reconnects, perhaps to another server, and resends. If that server knows the op only from Redis, it acks once the op is in Postgres (normally within ~100 ms). If it still isn't there after 5 s, the server that sequenced it died before committing; the op is then treated as new (fresh seq, applied again, which is idempotent). A seq collision in Postgres (a reset Redis counter racing an in-flight op) isn't acked either: the client resends and the op gets a new seq.
+
+**Loading a room on a second server.** The server subscribes to `board:{id}` first (buffering messages), then reads snapshot + tail from Postgres, then reads the Redis counter: any seq up to it that Postgres doesn't have yet is a gap for the filler below, and the buffered messages are applied last. No op can fall between the read and the subscription.
 
 **Snapshotter**
 
 - Triggered every 500 ops or 60 s of activity per board, and when a room unloads.
-- Takes a Redis lock `snap-lock:{boardId}` (`SET NX EX 30`) so only one server snapshots a board at a time.
+- Takes a Redis lock `snap-lock:{boardId}` (`SET NX PX 30000`, released only by its holder) so only one server snapshots a board at a time; a server that doesn't get it skips this round.
+- Snapshots the room's state at its watermark `upTo`: the state may contain later ops too (applied out of order), which is harmless because loading re-applies them idempotently.
 - Writes `board_snapshots(board_id, seq, state)` and deletes ops older than the previous snapshot to cap table growth.
 - Tombstone GC: drops tombstones older than `TOMBSTONE_TTL_MS` (24 h by default). A tombstone's age is the server's commit time of the op that set `deleted: true` (`board_ops.created_at`), so `shared` never needs wall-clock time.
 
-**Presence** never touches Postgres. Cursor and select messages are broadcast locally and published on a separate channel `presence:{boardId}`. The online list lives in a Redis hash `online:{boardId}` (userId → lastSeen) so all servers see the same list; a sweep every 5 s removes entries older than 15 s.
+**Presence** never touches Postgres. Cursor, select and typing messages, joins and leaves are sent to local sockets and published on a separate channel `presence:{boardId}`. The online list lives in a Redis hash `online:{boardId}`, one field per connection (`peerId` → `{ userId, name, serverId, lastSeen }`), because presence is per connection (two tabs = two cursors). `welcome` lists the peers from that hash. Each server refreshes `lastSeen` for its own sockets every 5 s; a sweep removes entries older than 15 s, which is how the peers of a crashed server disappear, and the server whose `HDEL` succeeded publishes their `peer-leave`.
 
 **Why rooms hold state in memory:** validating an update needs the current shape (does it exist? who created this stroke?). Reading Postgres for every op would be far too slow; the in-memory board answers instantly.
 
@@ -354,9 +364,15 @@ CREATE TABLE board_snapshots (
 | `seq:{boardId}` | Integer | Permanent (rebuilt from Postgres max seq if lost) | Next sequence number |
 | `board:{boardId}` | Pub/sub channel | While any server has the room loaded | Op fan-out between servers |
 | `presence:{boardId}` | Pub/sub channel | Same | Cursor and selection fan-out |
-| `online:{boardId}` | Hash userId → lastSeen | Entries swept after 15 s | Online list |
-| `snap-lock:{boardId}` | String | 30 s | One snapshotter at a time |
-| `rl:ws:{userId}` | Hash | 1 min | Op rate limit per user |
+| `online:{boardId}` | Hash peerId → `{ userId, name, serverId, lastSeen }` | Entries swept after 15 s | Online list (per connection) |
+| `snap-lock:{boardId}` | String (holder's serverId) | 30 s | One snapshotter at a time |
+| `rl:ws:{userId}` | Hash `{ tokens, at }` | 1 min | Op token bucket per user, across servers |
+| `sockets:{userId}` | Hash connId → expiry | Entries expire 15 s after their server last refreshed them | Max 5 open sockets per user, across servers |
+| `revoked:{jti}` | String | Until the JWT would expire | Logged-out sessions |
+| `sessions` | Pub/sub channel | Always | "Close every socket of session `jti`" (logout) |
+| `rl:auth:*` | (from @fastify/rate-limit) | 1 min | Login/signup limit per IP, across servers |
+
+Redis runs with AOF persistence (`appendonly yes`) so a restart keeps the seq counters; the floor in the seq script covers the case where one is lost anyway.
 
 **Size estimate.** A typical op is about 150 bytes as JSON. A busy 1-hour session with 10 people produces roughly 50,000 ops, about 7.5 MB, before compaction. Snapshots of a 2,000-shape board are about 0.5–1 MB. Deleting ops older than the previous snapshot keeps each board to a few MB, well within free Postgres tiers.
 
@@ -368,7 +384,7 @@ REST handles everything that isn't live editing: accounts, the board list and sh
 | --- | --- | --- |
 | `POST /api/auth/signup` | none | Create account; sets JWT cookie |
 | `POST /api/auth/login` | none | Sets JWT cookie (httpOnly, SameSite=Lax, 7 days) |
-| `POST /api/auth/logout` | user | Clears cookie |
+| `POST /api/auth/logout` | user | Revokes the session (its `jti` goes into Redis until the JWT expires) and clears the cookie; that session's sockets on every server close with `4001` |
 | `GET /api/me` | user | Current user |
 | `GET /api/boards` | user | Boards I own or am a member of, newest first |
 | `POST /api/boards` | user | Create board; caller becomes owner |
@@ -378,11 +394,12 @@ REST handles everything that isn't live editing: accounts, the board list and sh
 | `POST /api/boards/:id/members` | owner | Add member by email with a role |
 | `PATCH /api/boards/:id/members/:userId` | owner | Change role; pushed to their open sockets immediately |
 | `DELETE /api/boards/:id/members/:userId` | owner | Remove; their sockets are closed |
-| `PUT /api/boards/:id/link` | owner | Turn link sharing on/off and set its role; rotates the token |
-| `POST /api/join/:linkToken` | user | Adds caller as a member with the link's role |
+| `GET /api/boards/:id/link` | owner | Current share link: `{ role, token }` or `null` |
+| `PUT /api/boards/:id/link` | owner | `{ role }` with `viewer`, `editor` or `null`: turn link sharing on (new token), change its role (new token) or off; rotating invalidates the old link |
+| `POST /api/join/:linkToken` | user | Adds the caller as a member with the link's role (never lowers an existing role); returns the board |
 | `GET /api/health` | none | Postgres + Redis reachable |
 
-**Role changes reach live sockets** through a Redis message on `board:{id}` of type `role-changed`, so a demoted editor's next op is rejected even if they're connected to a different server.
+**Role changes reach live sockets** through a Redis message on `board:{id}` of type `role` (and `removed`, `deleted`), so a demoted editor's next op is rejected even if they're connected to a different server.
 
 ## Failure handling and recovery
 
@@ -395,12 +412,14 @@ The design rule is simple: an op is safe once the client has an ack, and anythin
 | Browser tab closed or reloaded with unacked ops | They stay in the tab's IndexedDB queue, whose Web Lock the browser releases | The next load of the board (that tab after a reload, or any new tab) adopts the queue and sends the ops; the server dedupes by `opId` |
 | Server process crashes | Sockets drop; unflushed OpWriter batch is lost | Those ops were never acked, so clients resend them to whichever server they reconnect to |
 | Server restarts / deploys | Rooms unload | Rooms reload from snapshot + op log on first `hello` |
-| Redis restarts | Pub/sub drops messages for a moment; `seq` counter may be lost | On startup, servers set `seq:{id}` to `MAX(seq)` from Postgres; clients catch up by `lastSeq` on reconnect |
+| Redis restarts | Pub/sub drops messages for a moment; with AOF the counters survive | The seq script never hands out a seq below the highest one the room has seen; lost messages are gaps, filled from Postgres. While Redis is down, batches can't be sequenced: the socket is closed with 1013 and the client retries. The session check fails closed (503 on REST and on the upgrade) |
 | Pub/sub message lost between servers | Rooms on two servers briefly differ | Each server compares the seq it receives with the last it saw; a gap triggers a reload of the missing ops from Postgres |
-| Postgres slow or down | OpWriter flush fails | Retry with backoff; no acks are sent, so clients keep ops pending. Live relay to peers continues. If it lasts over 30 s, the server stops accepting ops and shows clients "Saving paused" |
+| Postgres slow or down | OpWriter flush fails | Retry with backoff; no acks are sent, so clients keep ops pending. Live relay to peers continues. If it lasts over 30 s (`SAVE_PAUSE_AFTER_MS`), the server sends `saving { paused: true }` and drops new batches unapplied (clients keep them pending and show "Saving paused"); the first successful commit sends `paused: false` and clients resend everything pending |
 | Same op received twice | Client resent after a lost ack | `UNIQUE (board_id, op_id)` + LWW idempotency: no duplicate, ack with the original seq |
 
-**Gap detection** is the one subtle piece. Seq numbers are assigned per board and normally have no gaps, so if a server has applied up to seq 120 and receives 123, it knows 121–122 are missing and reads them from Postgres. Clients do the same with the seq on every `ops` message. Snapshots only cover the highest **contiguous** seq a room has applied, so a snapshot never silently misses an op. One catch: a server can reserve a seq and then crash before writing it, leaving a permanent hole. If a missing seq still isn't in Postgres after 5 seconds, treat it as a hole and move past it; its op was never acked, so its author resends it with a new seq.
+**Gap detection** is the one subtle piece. Seq numbers are assigned per board and normally have no gaps, so if a server's watermark is at 120 and it receives 123, it knows 121–122 are missing. It delivers 123 to its sockets immediately (LWW doesn't care about order) but keeps its watermark at 120, and reads 121–122 from Postgres every 250 ms until they appear; each one found is applied, delivered and moves the watermark on. Clients do no gap detection: they only store the watermark (`upTo`) the server sends, which by construction never skips an op. Snapshots are taken at the watermark too, so a snapshot never silently misses an op. One catch: a server can reserve a seq and then crash before publishing or writing it, leaving a permanent hole. If a missing seq still isn't in Postgres after 5 seconds, the watermark moves past it; its op was never acked, so its author resends it with a new seq.
+
+**Why delivery isn't held back.** Holding out-of-order ops until the gap is filled would make catch-up simpler to reason about, but it would delay every live edit on the board behind one lost or slow message, by up to 5 s for a crashed server's hole. LWW already converges in any delivery order, so only the catch-up bookkeeping needs order, and the watermark gives it that without touching live latency.
 
 **Graceful shutdown:** on SIGTERM, stop accepting new sockets, flush OpWriter, snapshot every loaded room, then close sockets with code 1012 (service restart) so clients reconnect immediately instead of waiting for backoff.
 
@@ -413,10 +432,11 @@ The server trusts nothing a client sends: every socket is authenticated at the u
 - **Per-op authorization:** role checked on every batch, since roles can change while a socket is open.
 - **Validation:** Zod schemas for every message; numbers must be finite; strings and point arrays have maximum lengths; unknown fields are stripped.
 - **Ownership rules:** only a stroke's creator may `append` to it; clients cannot set `seq` or forge another user's ID (the server attaches `userId` from the socket).
-- **Rate limits:** ops per user per second, messages per socket per second, max open sockets per user (5).
+- **Rate limits:** ops per user per second (Redis token bucket, shared by all servers), messages per socket per second, max open sockets per user (5, counted in Redis across servers), login/signup per IP (Redis store).
+- **Sessions:** each JWT has a random `jti`. Logout stores it in `revoked:{jti}` until expiry and publishes on `sessions`, which closes that session's sockets everywhere (4001). REST and the WebSocket upgrade check the revocation list on every request and fail closed: if Redis is unreachable they answer 503 rather than accept a possibly revoked session (the app needs Redis for seqs anyway).
 - **XSS:** canvas drawing can't inject HTML, but note text is also shown in the textarea overlay and user names in the online list. Always set them via `textContent` / React, never `innerHTML`.
 - **Passwords:** bcrypt with cost 12; login rate-limited per IP.
-- **Share links:** 32-byte random tokens; rotating the link invalidates the old one.
+- **Share links:** 32-byte random tokens (base64url); turning the link on, changing its role or turning it off rotates or removes the token, which invalidates the old link. Joining never lowers an existing member's role and never makes anyone owner.
 
 ## Testing, metrics and load tests
 

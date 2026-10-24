@@ -36,6 +36,10 @@ services:
     build:
       context: .
       dockerfile: packages/server/Dockerfile
+    # Two instances behind nginx (round robin, no sticky sessions): rooms for the same board on
+    # both stay in sync through Redis pub/sub. Each gets its own SERVER_ID (hostname-based default).
+    deploy:
+      replicas: 2
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://whiteboard:${POSTGRES_PASSWORD}@postgres:5432/whiteboard

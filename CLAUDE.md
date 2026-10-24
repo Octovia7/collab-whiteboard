@@ -29,8 +29,11 @@ pnpm test:convergence         # randomized convergence test, all 500 seeds (must
 CONVERGENCE_SEED=42 pnpm test:convergence   # replay one failing seed (CONVERGENCE_SEEDS=n changes the count;
                               # the run fails at CONVERGENCE_DEADLINE_MS, default 120 s, checked between seeds)
 pnpm test:watch               # Vitest in watch mode
-pnpm test:integration         # Vitest against Docker Postgres (db whiteboard_test)
-pnpm test:e2e                 # Playwright (Chromium); db whiteboard_e2e, server :3101 (tests may kill/restart it), client :5199
+pnpm test:integration         # Vitest against Docker Postgres (db whiteboard_test) and Redis (db 1)
+pnpm test:e2e                 # builds first (build:e2e), then Playwright (Chromium) against built output: db whiteboard_e2e,
+                              # Redis db 2, servers :3101/:3102 from the bundle (tests may kill/restart them), clients
+                              # :5199/:5200 via `vite preview` (each proxies to its server)
+pnpm build:e2e                # server bundle + client `--mode e2e` (keeps window.__board) -> packages/client/dist-e2e
 pnpm -F server db:migrate     # run Drizzle migrations (the server also runs them on start)
 pnpm -F server db:generate    # new migration from src/db/schema.ts (never connects to a DB)
 pnpm -F server build          # production bundle (esbuild) -> packages/server/dist
@@ -81,11 +84,6 @@ This is a production system, not a demo. These standards are part of each milest
 
 | Limitation | Removed in |
 | --- | --- |
-| Rate limits, socket caps, the snapshot lock and presence (online list, cursors) are per server process (in memory); seq is assigned in memory | M8 (Redis: `rl:ws:*`, `INCR seq`, `snap-lock`, `presence:*` pub/sub, `online:*` hash) |
-| Single server only: no pub/sub between servers, no gap detection | M8 |
-| No share links; members are added by email only | M8 |
-| OpWriter has no "Saving paused" circuit breaker after 30 s of Postgres failures (it retries forever, without acking) | M8 |
-| A logged-out session's existing sockets stay open until they close (JWT is stateless) | M8 (session revocation on logout) |
 | No load test numbers yet | M9 |
 
 ## Core design rules (do not break these)
@@ -133,7 +131,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Postgres persistence, snapshots, auth, roles
 - [x] Pen tool (streaming, RDP, smoothing), eraser, presence
 - [x] Undo/redo, sticky notes, reconnect + catch-up
-- [ ] Redis pub/sub multi-server, sharing, rate limits
+- [x] Redis pub/sub multi-server, sharing, rate limits
 - [ ] E2E, chaos and load tests
 - [ ] Deploy, README, demo video
 
@@ -228,3 +226,20 @@ sends the queue. E2E simulates an outage as offline mode + refused WebSockets (`
 leaves WebSockets alone and fires `online` in the old page during `page.reload()`.
 Machine note: this Windows box is short of memory (commit ~22/24 GB with the user's apps); run Docker image builds and
 test suites one after the other, never at the same time.
+
+Milestone 8 done and merged: several servers behind one board via Redis (system-design.md "Server design"). Seqs from a
+Lua `INCRBY` with a floor (never below the highest seq the room has seen); ops delivered the moment a server has them, in
+any order; each server's watermark `upTo` (highest contiguously delivered seq; gaps read from Postgres every 250 ms,
+holes skipped after 5 s, rejected ops' seqs published as `skip`) goes out on welcome/ops/ack and is the client's lastSeq.
+A room loads by subscribing first, then snapshot + tail, then the Redis counter; a client whose lastSeq is ahead of the
+room waits (up to 6 s) for the room to fill in before its welcome. Resends known only from another server are acked once
+in Postgres, else re-sequenced after 5 s; a (board_id, seq) collision is not acked. Presence over `presence:{id}` with an
+`online:{id}` hash per connection (crashed servers' peers swept after 15 s). Redis token bucket and socket cap per user,
+login limit per IP in Redis, snapshot lock `snap-lock:{id}`. Role/removal/deletion fan out on `board:{id}`. Logout
+revokes the JWT's `jti` (`revoked:{jti}`) and closes that session's sockets everywhere (4001); REST and the upgrade fail
+closed (503) without Redis. "Saving paused" after `SAVE_PAUSE_AFTER_MS` (30 s) of failing commits: `saving {paused}`,
+batches dropped unapplied, clients resend on resume. Share links (`PUT/GET /api/boards/:id/link`, `POST /api/join/:token`,
+32-byte tokens rotated on every change, never lowering a role) with a Share dialog (invite, roles, remove, link) and a
+`?join=` route. Config: SERVER_ID, SAVE_PAUSE_AFTER_MS, GAP_POLL_MS, GAP_HOLE_MS, WB_FAULT_CONTROL (test-only route
+`POST /api/__test/faults`, refused in production). Tests: Redis db 1 (integration) / 2 (E2E), flushed like Postgres.
+E2E harness runs against built output (two bundled servers, two `vite preview` clients) instead of tsx + Vite dev servers.
