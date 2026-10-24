@@ -3,7 +3,7 @@ import type { Camera } from '../canvas/Camera';
 import type { BoardStore } from '../store/BoardStore';
 import type { Selection } from '../store/Selection';
 
-export type ToolName = 'select' | 'rect' | 'ellipse' | 'arrow' | 'pen' | 'eraser';
+export type ToolName = 'select' | 'rect' | 'ellipse' | 'arrow' | 'pen' | 'eraser' | 'note';
 
 /** The parts of a pointer event tools need. Kept DOM-free so tools are unit-testable. */
 export interface ToolPointer {

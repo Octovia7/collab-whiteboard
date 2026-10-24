@@ -1,6 +1,7 @@
 import type { BoardSnapshot, Point, Shape } from '@whiteboard/shared';
 import type { Camera } from './canvas/Camera';
 import type { BoardStore } from './store/BoardStore';
+import type { History } from './store/History';
 import type { Presence } from './store/Presence';
 import type { Selection } from './store/Selection';
 import type { ConnectionStatus, SyncClient } from './sync/SyncClient';
@@ -37,6 +38,14 @@ export interface DebugHandle {
   peers(): { peerId: string; userId: string; name: string; color: string; target: { x: number; y: number } | null; selection: string[] }[];
   /** People online, me first. */
   online(): { name: string; isYou: boolean; color: string }[];
+  /** The note whose editor is open in this tab, if any. */
+  editingNote(): string | null;
+  /** The note another peer is typing in, by name, if any. */
+  typingIn(noteId: string): string | null;
+  /** Undo/redo availability. */
+  history(): { canUndo: boolean; canRedo: boolean };
+  /** How the last welcome arrived: a full snapshot or catch-up ops (and how many). */
+  lastWelcome(): { kind: 'snapshot' | 'ops'; ops: number } | null;
 }
 
 declare global {
@@ -53,11 +62,12 @@ export function installDebugHandle(parts: {
   store: BoardStore;
   sync: SyncClient;
   presence: Presence;
+  history: History;
   camera: Camera;
   selection: Selection;
   tools: ToolController;
 }): () => void {
-  const { boardId, store, sync, presence, camera, selection, tools } = parts;
+  const { boardId, store, sync, presence, history, camera, selection, tools } = parts;
   window.__board = Object.freeze({
     boardId,
     clientId: store.clientId,
@@ -83,6 +93,10 @@ export function installDebugHandle(parts: {
         selection: [...p.selection],
       })),
     online: () => presence.online().map((u) => ({ name: u.name, isYou: u.isYou, color: u.color })),
+    editingNote: () => tools.editingNote,
+    typingIn: (noteId: string) => presence.typingIn(noteId)?.name ?? null,
+    history: () => ({ canUndo: history.canUndo, canRedo: history.canRedo }),
+    lastWelcome: () => (sync.lastWelcome ? { ...sync.lastWelcome } : null),
   });
   return () => {
     delete window.__board;

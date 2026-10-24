@@ -9,13 +9,16 @@ import { ToolInput } from './canvas/ToolInput';
 import { installDebugHandle } from './debug';
 import { demoCountFromUrl, seedDemo } from './demo';
 import { BoardStore } from './store/BoardStore';
+import { History } from './store/History';
 import { Presence } from './store/Presence';
 import { Selection } from './store/Selection';
 import { SyncClient } from './sync/SyncClient';
 import { ToolController } from './tools/ToolController';
 import { ConnectionBadge } from './ui/ConnectionBadge';
+import { NoteEditor } from './ui/NoteEditor';
 import { OnlineList } from './ui/OnlineList';
 import { Toolbar } from './ui/Toolbar';
+import { UndoControls } from './ui/UndoControls';
 import { UserMenu } from './ui/UserMenu';
 import { ZoomControls } from './ui/ZoomControls';
 
@@ -27,6 +30,7 @@ interface Board {
   store: BoardStore;
   sync: SyncClient;
   presence: Presence;
+  history: History;
   camera: Camera;
   selection: Selection;
   tools: ToolController;
@@ -44,8 +48,9 @@ function createBoard(boardId: string): Board {
   camera.y = -40;
   const selection = new Selection();
   const redrawOverlay = { current: () => {} };
-  const tools = new ToolController(store, selection, camera, () => redrawOverlay.current());
-  return { boardId, store, sync, presence, camera, selection, tools, redrawOverlay };
+  const history = new History(store);
+  const tools = new ToolController(store, selection, camera, () => redrawOverlay.current(), undefined, history);
+  return { boardId, store, sync, presence, history, camera, selection, tools, redrawOverlay };
 }
 
 interface Props {
@@ -100,6 +105,10 @@ export function App({ board: summary, user, onLogout }: Props) {
     const offPrune = store.events.on('change', () => selection.retain((id) => store.isVisible(id)));
     // Viewers get a read-only UI, switched live when the owner changes their role.
     const offRole = sync.events.on('role', (role) => tools.setReadOnly(role === 'viewer'));
+    // Sticky notes: a note someone else is typing in is soft-locked here, and my own editing
+    // is announced so other tabs show "… is typing".
+    tools.setNoteLock((id) => presence.typingIn(id) !== undefined);
+    const offEditing = tools.events.on('change', () => sync.sendTyping(tools.editingNote));
 
     // ?demo=N seeds only an empty board, after the server's snapshot has arrived, so a second
     // tab on the same board doesn't add another copy.
@@ -115,6 +124,7 @@ export function App({ board: summary, user, onLogout }: Props) {
       uninstallDebug();
       sync.stop();
       offRole();
+      offEditing();
       offWelcome();
       offPrune();
       offPeers();
@@ -140,6 +150,7 @@ export function App({ board: summary, user, onLogout }: Props) {
       </div>
       <Toolbar tools={board.tools} selection={board.selection} />
       <ZoomControls camera={board.camera} getCenter={getCenter} />
+      <UndoControls tools={board.tools} history={board.history} />
       <header className="board-header">
         <button type="button" className="link" onClick={openBoardList}>
           ← Boards
@@ -149,6 +160,7 @@ export function App({ board: summary, user, onLogout }: Props) {
         <UserMenu user={user} onLogout={onLogout} />
       </header>
       <ConnectionBadge sync={board.sync} boardId={board.boardId} />
+      <NoteEditor tools={board.tools} store={board.store} camera={board.camera} />
     </>
   );
 }

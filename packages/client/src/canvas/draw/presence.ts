@@ -21,6 +21,23 @@ export function drawPresence(ctx: CanvasRenderingContext2D, zoom: number, peers:
     }
     ctx.setLineDash([]);
   }
+  // Soft lock: a note someone is typing in gets their color and an "is typing" tag.
+  for (const peer of peers) {
+    if (!peer.typing) continue;
+    const b = boundsOf(peer.typing);
+    if (!b) continue;
+    ctx.strokeStyle = peer.color;
+    ctx.lineWidth = 3 * px;
+    ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+    ctx.font = `${12 * px}px system-ui, sans-serif`;
+    const label = `${peer.name} is typing…`;
+    const w = ctx.measureText(label).width + 10 * px;
+    ctx.fillStyle = peer.color;
+    ctx.fillRect(b.minX, b.minY - 20 * px, w, 18 * px);
+    ctx.fillStyle = '#ffffff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, b.minX + 5 * px, b.minY - 11 * px);
+  }
   for (const peer of peers) {
     if (!peer.cursor) continue;
     const { x, y } = peer.cursor;
