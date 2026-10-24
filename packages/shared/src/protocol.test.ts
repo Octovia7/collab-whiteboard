@@ -67,7 +67,8 @@ describe('server messages', () => {
     expect(okS({ t: 'welcome', you: me, role: 'editor', peers: [{ ...me, peerId: 'p2' }], snapshot: { shapes: [] }, upTo: 0 })).toBe(true);
     expect(okS({ t: 'peer-join', peer: me })).toBe(true);
     expect(okS({ t: 'peer-leave', peerId: 'p1' })).toBe(true);
-    expect(okS({ t: 'cursor', peerId: 'p1', x: 1, y: 2 })).toBe(true);
+    expect(okS({ t: 'cursors', cursors: [{ peerId: 'p1', x: 1, y: 2 }] })).toBe(true);
+    expect(okS({ t: 'cursors', cursors: [{ peerId: 'p1', x: 'left', y: 2 }] })).toBe(false);
     expect(okS({ t: 'select', peerId: 'p1', ids: ['a-1'] })).toBe(true);
     expect(okS({ t: 'typing', peerId: 'p1', id: null })).toBe(true);
     expect(okS({ t: 'ack', opIds: ['a:1'], upTo: 3 })).toBe(true);

@@ -56,6 +56,9 @@ export function handleConnection(socket: WebSocket, who: SocketIdentity, deps: C
     send: (msg) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
     },
+    sendRaw: (json) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(json);
+    },
     close: (code, reason) => socket.close(code, reason),
     terminate: () => {
       log.info('no heartbeat: terminating');

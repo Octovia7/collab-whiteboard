@@ -212,7 +212,8 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 | `saving` | `paused: boolean` | Postgres has been failing for 30 s: this server stops accepting ops (`true`) until a commit succeeds again (`false`). Edits stay pending; on `false` the client resends them |
 | `reject` | `opId, reason, shape` | Op refused; `shape` is the server's stored registers for that shape (values *with* their stamps, in snapshot form) or `null` if the server has no such shape. See "Rollback" below |
 | `peer-join` / `peer-leave` | `peer { peerId, userId, name }` / `peerId` | Online list changes |
-| `cursor` / `select` | `peerId, …` | Other users' presence |
+| `cursors` | `cursors: { peerId, x, y }[]` | Other users' latest cursors, batched: one message per socket every 50 ms (a socket's own cursor may be included; clients ignore it) |
+| `select` | `peerId, ids` | Another user's selection |
 | `role` | `role` | Your role on this board changed (owner changed it over REST). Applies to your next batch; no reconnect |
 | `typing` | `peerId, id` | Another peer started (`id`) or stopped (`null`) editing a note |
 | `pong` | | Reply to `ping`. A client that hears nothing at all for three heartbeats treats the socket as dead and reconnects |

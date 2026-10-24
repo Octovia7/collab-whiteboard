@@ -5,7 +5,7 @@ import type { OpStore, StoredOp } from '../persistence/OpStore';
 import { Room } from './Room';
 import type { Peer } from './Room';
 
-const PRESENCE_TYPES = new Set(['peer-join', 'peer-leave', 'cursor', 'select', 'typing']);
+const PRESENCE_TYPES = new Set(['peer-join', 'peer-leave', 'cursors', 'select', 'typing']);
 let peerCounter = 0;
 
 /** A fake socket. Presence messages land in `presence`, everything else in `inbox`. */
@@ -23,6 +23,7 @@ function peer(userId: string, role: Role = 'editor') {
     closed: null as number | null,
     terminated: false,
     send: (m: ServerMessage) => void (PRESENCE_TYPES.has(m.t) ? presence : inbox).push(m),
+    sendRaw: (json: string) => p.send(JSON.parse(json) as ServerMessage),
     close: (code: number) => {
       p.closed = code;
     },
@@ -232,7 +233,7 @@ describe('Room: presence', () => {
     expect(a.presence.filter((m) => m.t === 'peer-leave')).toHaveLength(1);
   });
 
-  it('relays cursors and selections to everyone else, viewers included, and never applies them', () => {
+  it('relays cursors and selections to everyone else, viewers included, and never applies them', async () => {
     const room = new Room('b', new MemoryOpStore());
     const a = peer('ua', 'viewer');
     const b = peer('ub');
@@ -241,12 +242,13 @@ describe('Room: presence', () => {
     room.relayPresence(a, { t: 'cursor', x: 10, y: 20 });
     room.relayPresence(a, { t: 'select', ids: ['x-1'] });
     room.relayPresence(a, { t: 'typing', id: 'x-1' });
-    expect(b.presence.slice(-3)).toEqual([
-      { t: 'cursor', peerId: a.peerId, x: 10, y: 20 },
+    expect(b.presence.slice(-2)).toEqual([
       { t: 'select', peerId: a.peerId, ids: ['x-1'] },
       { t: 'typing', peerId: a.peerId, id: 'x-1' },
     ]);
-    expect(a.presence.some((m) => m.t === 'cursor')).toBe(false); // not echoed back
+    await new Promise((r) => setTimeout(r, 70)); // the cursor goes out with the next 50 ms batch
+    expect(b.presence.at(-1)).toEqual({ t: 'cursors', cursors: [{ peerId: a.peerId, x: 10, y: 20 }] });
+    expect(a.presence.some((m) => m.t === 'cursors')).toBe(false); // its own cursor alone isn't echoed back
     expect(room.snapshot().shapes).toEqual([]);
     expect(room.upTo).toBe(0);
   });
@@ -495,5 +497,64 @@ describe('Room: several servers (watermark, gaps, resends)', () => {
     await room.handleOps(a, [create('c-1', 1)]); // resent after `saving { paused: false }`
     expect(kinds(a.inbox)).toEqual(['ack']);
     expect(kinds(b.inbox)).toEqual(['ops']);
+  });
+});
+
+describe('Room: cursor batching', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('sends each socket one message per 50 ms with every peer\'s latest cursor', async () => {
+    const room = new Room('b', new MemoryOpStore());
+    const [a, b, c] = [peer('ua'), peer('ub'), peer('uc')];
+    for (const p of [a, b, c]) room.join(p);
+    for (let i = 0; i < 10; i++) {
+      room.relayPresence(a, { t: 'cursor', x: i, y: i });
+      room.relayPresence(b, { t: 'cursor', x: 100 + i, y: 0 });
+    }
+    await wait(70);
+    const batches = (p: ReturnType<typeof peer>) => p.presence.filter((m) => m.t === 'cursors');
+    // 20 cursor updates became one message per socket, with only the latest of each peer.
+    for (const p of [a, b, c]) expect(batches(p)).toHaveLength(1);
+    expect(batches(c)[0]).toEqual({
+      t: 'cursors',
+      cursors: [
+        { peerId: a.peerId, x: 9, y: 9 },
+        { peerId: b.peerId, x: 109, y: 0 },
+      ],
+    });
+    room.dispose();
+  });
+
+  it("publishes only this server's cursors, merges other servers' batches without republishing them", async () => {
+    const published: unknown[] = [];
+    const room = new Room('b', new MemoryOpStore(), { publishPresence: (e) => published.push(e) });
+    const [a, b] = [peer('ua'), peer('ub')];
+    room.join(a);
+    room.join(b);
+    published.length = 0; // the joins
+    room.relayPresence(a, { t: 'cursor', x: 1, y: 2 });
+    room.deliverPresence({ type: 'cursors', cursors: [{ peerId: 'remote-1', x: 5, y: 6 }] });
+    await wait(70);
+    expect(published).toEqual([{ type: 'cursors', cursors: [{ peerId: a.peerId, x: 1, y: 2 }] }]);
+    expect(b.presence.at(-1)).toEqual({
+      t: 'cursors',
+      cursors: [
+        { peerId: a.peerId, x: 1, y: 2 },
+        { peerId: 'remote-1', x: 5, y: 6 },
+      ],
+    });
+    room.dispose();
+  });
+
+  it('a peer that leaves before the tick drops out of the batch', async () => {
+    const room = new Room('b', new MemoryOpStore());
+    const [a, b, c] = [peer('ua'), peer('ub'), peer('uc')];
+    for (const p of [a, b, c]) room.join(p);
+    room.relayPresence(a, { t: 'cursor', x: 1, y: 1 });
+    room.relayPresence(b, { t: 'cursor', x: 2, y: 2 });
+    room.leave(a);
+    await wait(70);
+    expect(c.presence.at(-1)).toEqual({ t: 'cursors', cursors: [{ peerId: b.peerId, x: 2, y: 2 }] });
+    room.dispose();
   });
 });

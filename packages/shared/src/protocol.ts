@@ -150,7 +150,11 @@ export type ServerMessage =
   | { t: 'reject'; opId: string; reason: string; shape: SnapshotShape | null }
   | { t: 'peer-join'; peer: PeerInfo }
   | { t: 'peer-leave'; peerId: string }
-  | { t: 'cursor'; peerId: string; x: number; y: number }
+  /**
+   * Other peers' latest cursors, batched: the server collects cursor updates per room and sends
+   * them every 50 ms in one message, instead of relaying each one (algorithms.md §8).
+   */
+  | { t: 'cursors'; cursors: { peerId: string; x: number; y: number }[] }
   | { t: 'select'; peerId: string; ids: string[] }
   | { t: 'typing'; peerId: string; id: string | null }
   /** Your role on this board changed; it applies to your next batch (no reconnect needed). */
@@ -203,7 +207,7 @@ export const serverMessageSchema = z.union([
   z.object({ t: z.literal('welcome'), you: peer, role, peers: z.array(peer), upTo, ops: z.array(opSchema) }).strict(),
   z.object({ t: z.literal('peer-join'), peer }),
   z.object({ t: z.literal('peer-leave'), peerId: z.string() }),
-  z.object({ t: z.literal('cursor'), peerId: z.string(), x: coord, y: coord }),
+  z.object({ t: z.literal('cursors'), cursors: z.array(z.object({ peerId: z.string(), x: coord, y: coord })).max(10_000) }),
   z.object({ t: z.literal('select'), peerId: z.string(), ids: z.array(z.string()).max(LIMITS.maxSelectedIds) }),
   z.object({ t: z.literal('typing'), peerId: z.string(), id: z.string().nullable() }),
   z.object({ t: z.literal('ops'), ops: z.array(opSchema), upTo }),
