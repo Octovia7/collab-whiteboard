@@ -205,12 +205,12 @@ All messages are JSON with a `t` (type) field and are validated with Zod on arri
 
 | `t` | Payload | Meaning |
 | --- | --- | --- |
-| `welcome` | `you, role, peers[]` + either `snapshot, seq` or `ops[]` (catch-up) | Reply to `hello` |
+| `welcome` | `you, role, peers[]` + either `snapshot, seq` or `ops[]` (catch-up) | Reply to `hello`; `you` and each peer are `{ peerId, userId, name }` |
 | `ops` | `ops: Op[], seq` | Ops from other users, with the highest seq included |
 | `ack` | `opIds[], seq` | Your ops were accepted and logged |
 | `reject` | `opId, reason, shape` | Op refused; `shape` is the server's stored registers for that shape (values *with* their stamps, in snapshot form) or `null` if the server has no such shape. See "Rollback" below |
-| `peer-join` / `peer-leave` | `user` | Online list changes |
-| `cursor` / `select` | `userId, …` | Other users' presence |
+| `peer-join` / `peer-leave` | `peer { peerId, userId, name }` / `peerId` | Online list changes |
+| `cursor` / `select` | `peerId, …` | Other users' presence |
 | `role` | `role` | Your role on this board changed (owner changed it over REST). Applies to your next batch; no reconnect |
 | `error` | `code, message` | e.g. `forbidden`, `board_not_found`; socket then closes |
 
@@ -224,6 +224,8 @@ type Op =
 // delete = update { deleted: true }
 // append: `chunk` is the author's per-stroke chunk number (0, 1, 2...); see algorithms.md §7a
 ```
+
+**Presence identity.** Presence is per connection, not per user: every socket gets a server-assigned `peerId`, sent with its `userId` and display name. The same person with two tabs open shows two cursors (one per tab), while online lists group entries by `userId`, so they appear once. Peers are dropped when their socket closes or after 15 s without any message (clients send `ping` every 5 s when idle).
 
 **Close codes.** After a socket has been accepted, the server closes it with: `1008` for a protocol violation (malformed message, ops before `hello`), `4003` when the user was removed from the board, `4004` when the board was deleted. The client never reconnects after these; any other close (network drop, server restart, `1012` service restart) is retried with backoff. Authentication failures happen earlier, as HTTP 401/403 on the upgrade, so no socket exists to close.
 

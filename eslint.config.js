@@ -13,6 +13,13 @@ export default tseslint.config(
     },
   },
   {
+    // Plain Node scripts (build, measurements): Node's globals.
+    files: ['scripts/**/*.mjs', 'packages/*/build.mjs'],
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly' },
+    },
+  },
+  {
     // CLAUDE.md rule 12: client and server share code only through @whiteboard/shared.
     files: ['packages/client/**/*.{ts,tsx}'],
     rules: {

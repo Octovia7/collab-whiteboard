@@ -26,8 +26,13 @@ COPY --from=build --chown=node:node /repo/packages/server/dist ./dist
 COPY --from=build --chown=node:node /repo/packages/server/drizzle ./drizzle
 USER node
 EXPOSE 3001
-HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=3 \
+# While starting, check every second (start-interval) so the container is marked healthy within
+# ~1 s of listening; afterwards every 10 s.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --start-interval=1s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3001/healthz > /dev/null || exit 1
 # Node is PID 1 and handles SIGTERM itself (graceful shutdown in src/index.ts).
 # Migrations run on start, serialized across replicas by an advisory lock.
-CMD ["node", "--enable-source-maps", "dist/index.js"]
+# Source maps are shipped (dist/*.map) but not enabled: parsing them roughly doubles startup.
+# Stack traces keep function names (esbuild keepNames); to map positions back to TypeScript,
+# run with NODE_OPTIONS=--enable-source-maps while debugging.
+CMD ["node", "dist/index.js"]
