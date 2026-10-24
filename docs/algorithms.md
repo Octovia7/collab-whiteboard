@@ -755,7 +755,7 @@ Each client remembers `lastSeq`, the highest server sequence it has applied.
 
 **Short disconnect (Wi-Fi blip):** on reconnect, send `hello { boardId, lastSeq }`. The server replies with every op where `seq > lastSeq`. The client applies them, then resends its pending queue. The server can answer from memory: each room keeps the ops since its previous snapshot (the range Postgres still holds), and clients from before that, or from before a tombstone GC, get a snapshot instead.
 
-**Long offline session:** the user keeps drawing; ops pile up in the pending queue, saved to IndexedDB so a closed tab doesn't lose them (stretch goal). On reconnect, the same `hello` + resend happens. Every op carries its Lamport stamp, so LWW merges everything correctly with no special merge logic. This is the payoff of the design.
+**Long offline session:** the user keeps drawing; ops pile up in the pending queue, saved to IndexedDB so a reload or a closed tab doesn't lose them (one queue per tab; a closed tab's queue is adopted by the next tab that opens the board, see system-design.md "Offline queue"). On reconnect, the same `hello` + resend happens. Every op carries its Lamport stamp, so LWW merges everything correctly with no special merge logic. This is the payoff of the design.
 
 **Too far behind:** if `lastSeq` is older than the oldest op still in the log (or tombstones it might depend on were already collected), the server sends a fresh snapshot instead, and the client reapplies its pending queue on top. Loading the snapshot also clears the client's buffer of ops waiting for their create (section 3).
 
@@ -792,7 +792,7 @@ Build sections 1–11 fully and the simple versions of section 12.
 | Quadtree culling + hit testing + box select | Build | 11 |
 | Op log + snapshots + reload | Build | 12a |
 | Reconnect catch-up with `lastSeq` | Build | 12b |
-| Offline queue saved in IndexedDB | Stretch goal | 12b |
+| Offline queue saved in IndexedDB | Build (done after milestone 7) | 12b |
 | Redis pub/sub across 2 servers | Build the simple version; demo with 2 local processes | 12c |
 | Version history UI | Skip (describe it) | 12a |
 | Consistent-hashing board owners | Skip (describe it) | 12c |
