@@ -13,6 +13,7 @@
   "include": [
     "playwright.config.ts",
     "playwright.smoke.config.ts",
+    "scripts/bench",
     "tests",
     "vitest.config.ts",
     "vitest.convergence.config.ts",

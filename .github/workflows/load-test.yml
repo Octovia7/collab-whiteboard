@@ -1,0 +1,81 @@
+name: Load test
+
+# Manual only: the full load ramp (scripts/bench/load.ts) against the production stack
+# (two server replicas behind nginx) on a GitHub-hosted runner, which has more room than the
+# development laptop. The results JSON, including the runner's CPU and RAM, is uploaded as an
+# artifact. See docs/benchmarks.md.
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: Bot counts to ramp through
+        default: "10,20,30,50,100"
+      workers:
+        description: Load generator worker processes
+        default: "2"
+      measure_ms:
+        description: Measurement window per step (ms)
+        default: "30000"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-test
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: Load ramp
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Runner specs
+        run: |
+          nproc
+          lscpu | grep -E 'Model name|^CPU\(s\)'
+          free -m
+          docker info --format 'Docker VM: {{.NCPU}} CPUs, {{.MemTotal}} bytes'
+      - name: Secrets for this run only
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')"
+            echo "JWT_SECRET=$(openssl rand -base64 48 | tr -d '/+=')"
+            echo "APP_ORIGIN=http://localhost:8080"
+            echo "APP_PORT=8080"
+            echo "COOKIE_SECURE=true"
+          } > .env.prod
+      # The bots sign up through the API; the default of 10 sign-ups per IP per minute would
+      # take ten minutes for 100 bots.
+      - run: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --wait
+        env:
+          AUTH_RATE_LIMIT_PER_MIN: "1000"
+      - run: pnpm bench:load
+        env:
+          BOT_STEPS: ${{ inputs.steps }}
+          WORKERS: ${{ inputs.workers }}
+          MEASURE_MS: ${{ inputs.measure_ms }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-results
+          path: docs/bench-results/load-*.json
+          if-no-files-found: warn
+          retention-days: 30
+      - if: always()
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod logs --no-color > prod-stack.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-stack-log
+          path: prod-stack.log
+          retention-days: 7
+      - if: always()
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod down -v

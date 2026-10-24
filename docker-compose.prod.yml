@@ -50,6 +50,9 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Login/signup attempts per IP per minute. The benchmarks (scripts/bench) raise it from
+      # the shell to sign up their bots: AUTH_RATE_LIMIT_PER_MIN=1000 docker compose ... up
+      AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-10}
     depends_on:
       postgres:
         condition: service_healthy
