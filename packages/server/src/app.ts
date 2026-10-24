@@ -3,7 +3,7 @@ import fastifyCors from '@fastify/cors';
 import fastifyHelmet from '@fastify/helmet';
 import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
-import { LIMITS, SERVICE_RESTART } from '@whiteboard/shared';
+import { CLOSE, LIMITS, SERVICE_RESTART } from '@whiteboard/shared';
 import Fastify from 'fastify';
 import type { FastifyError, FastifyInstance } from 'fastify';
 import type { Redis } from 'ioredis';
@@ -11,12 +11,13 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex, Writable } from 'node:stream';
 import { WebSocketServer } from 'ws';
+import type { WebSocket } from 'ws';
 import { z } from 'zod';
 import type { Config } from './config';
 import { connect } from './db/client';
 import type { Database } from './db/client';
 import { AppError, isTransient } from './errors';
-import { SESSION_COOKIE, registerAuthRoutes } from './http/auth';
+import { SESSION_COOKIE, registerAuthRoutes, sessionValid } from './http/auth';
 import { registerBoardRoutes } from './http/boards';
 import { createMetrics } from './metrics';
 import type { Metrics } from './metrics';
@@ -24,9 +25,11 @@ import { OpWriter } from './persistence/OpWriter';
 import { Repo } from './persistence/repo';
 import { Snapshotter } from './persistence/Snapshotter';
 import { connectRedis } from './redis';
+import { acquireSnapshotLock } from './redisState';
 import { handleConnection } from './ws/connection';
 import type { SocketIdentity } from './ws/connection';
 import { UserLimits } from './ws/rateLimit';
+import { RedisBus } from './ws/RedisBus';
 import { RoomManager } from './ws/RoomManager';
 
 export interface App {
@@ -35,6 +38,8 @@ export interface App {
   repo: Repo;
   database: Database;
   redis: Redis;
+  bus: RedisBus;
+  writer: OpWriter;
   metrics: Metrics;
   /** Graceful shutdown: flush, close sockets with 1012, snapshot rooms, close everything. */
   shutdown(): Promise<void>;
@@ -42,7 +47,7 @@ export interface App {
 
 const uuid = z.string().uuid();
 
-type UpgradeResult = { ok: false; status: number; text: string; reason: string } | ({ ok: true } & SocketIdentity);
+type UpgradeResult = { ok: false; status: number; text: string; reason: string } | ({ ok: true; jti: string } & SocketIdentity);
 
 const STATUS_CODES: Record<number, string> = {
   400: 'bad_request',
@@ -87,22 +92,53 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
   const metrics = createMetrics();
   const database = connect(config.databaseUrl);
   const redis = connectRedis(config.redisUrl, app.log);
+  const bus = new RedisBus(redis, config.serverId, app.log);
   const repo = new Repo(database.db);
-  const writer = new OpWriter(repo, app.log, config.faults.commitDelayMs);
-  const snapshotter = new Snapshotter(repo, writer, app.log, config.snapshotEveryOps, config.snapshotEveryMs, metrics, config.tombstoneTtlMs);
+  const writer = new OpWriter(repo, app.log, { commitDelayMs: config.faults.commitDelayMs, pauseAfterMs: config.savePauseAfterMs });
+  const snapshotter = new Snapshotter(
+    repo,
+    writer,
+    app.log,
+    config.snapshotEveryOps,
+    config.snapshotEveryMs,
+    metrics,
+    config.tombstoneTtlMs,
+    Date.now,
+    (boardId) => acquireSnapshotLock(redis, boardId, config.serverId),
+  );
+  /** Open sockets on this server: connId -> owner, for refreshing the cross-server socket count. */
+  const live = new Map<string, { userId: string; connId: string }>();
+  /** Open sockets per session (JWT id): a logout anywhere closes them. */
+  const bySession = new Map<string, Set<WebSocket>>();
   const rooms = new RoomManager({
     repo,
-    store: writer,
+    writer,
     snapshotter,
+    redis,
+    bus,
     log: app.log,
     unloadAfterMs: config.roomUnloadMs,
     ackDelayMs: config.faults.ackDelayMs,
     metrics,
     presenceTimeoutMs: config.presence.timeoutMs,
     presenceSweepMs: config.presence.sweepMs,
+    gapPollMs: config.gap.pollMs,
+    holeAfterMs: config.gap.holeAfterMs,
+    liveSockets: () => [...live.values()],
   });
-  const limits = new UserLimits(config.ws.opsPerSec, config.ws.opsBurst, config.ws.maxSocketsPerUser);
+  const limits = new UserLimits(redis, config.ws.opsPerSec, config.ws.opsBurst, config.ws.maxSocketsPerUser, config.presence.timeoutMs, app.log);
   let shuttingDown = false;
+
+  // Logout (on any server): close this session's sockets here. Final for the client (4001).
+  bus.onSessionRevoked((jti) => {
+    const sockets = bySession.get(jti);
+    if (!sockets) return;
+    metrics.sessionsRevoked.inc();
+    for (const ws of sockets) {
+      ws.send(JSON.stringify({ t: 'error', code: 'logged_out', message: 'logged out' }));
+      ws.close(CLOSE.loggedOut, 'logged_out');
+    }
+  });
 
   app.addHook('onSend', async (req, reply) => {
     reply.header('x-request-id', req.id);
@@ -117,10 +153,16 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
   });
+  app.decorate('redis', redis);
   await app.register(fastifyCookie);
   await app.register(fastifyJwt, { secret: config.jwtSecret, cookie: { cookieName: SESSION_COOKIE, signed: false } });
   await app.register(fastifyRateLimit, {
     global: false, // only the routes that opt in (login, signup)
+    // Counted in Redis, so the limit holds across servers. If Redis is down the request fails
+    // (503) rather than skipping the limit: login without it would allow unlimited guessing.
+    redis,
+    nameSpace: 'rl:auth:',
+    skipOnError: false,
     errorResponseBuilder: (_req, ctx) => ({ statusCode: 429, error: 'rate_limited', message: `retry in ${ctx.after}` }),
   });
 
@@ -168,8 +210,19 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     return reply.type(metrics.registry.contentType).send(await metrics.registry.metrics());
   });
 
-  registerAuthRoutes(app, repo, config);
+  registerAuthRoutes(app, repo, config, bus);
   registerBoardRoutes(app, repo, rooms);
+
+  // Test-only fault control (E2E): make commits fail to exercise "Saving paused". The config
+  // refuses WB_FAULT_CONTROL in production, so this route never exists there.
+  if (config.faults.control) {
+    app.post('/api/__test/faults', async (req) => {
+      const body = z.object({ failCommits: z.boolean() }).parse(req.body);
+      writer.faults.failCommits = body.failCommits;
+      app.log.warn({ failCommits: body.failCommits }, 'fault injection changed');
+      return { ok: true };
+    });
+  }
 
   // maxPayload enforces the 256 KB message limit before any JSON parsing happens.
   const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.maxMessageBytes });
@@ -188,17 +241,26 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     // user visits could open a socket as them (cross-site WebSocket hijacking).
     if (!config.allowedOrigins.includes(req.headers.origin ?? '')) return { ok: false, status: 403, text: 'Forbidden', reason: 'origin' };
     const token = app.parseCookie(req.headers.cookie ?? '')[SESSION_COOKIE];
-    let userId: string;
+    let session: { sub: string; jti?: string };
     try {
-      userId = app.jwt.verify<{ sub: string }>(token ?? '').sub;
+      session = app.jwt.verify<{ sub: string; jti?: string }>(token ?? '');
     } catch {
       return { ok: false, status: 401, text: 'Unauthorized', reason: 'no_session' };
     }
+    // Fails closed: if Redis can't say whether the session was logged out, refuse (503).
+    let valid: boolean;
+    try {
+      valid = await sessionValid(redis, session);
+    } catch {
+      return { ok: false, status: 503, text: 'Service Unavailable', reason: 'session_check_failed' };
+    }
+    if (!valid) return { ok: false, status: 401, text: 'Unauthorized', reason: 'session_revoked' };
+    const userId = session.sub;
     const role = await repo.getRole(board.data, userId);
     if (!role) return { ok: false, status: 403, text: 'Forbidden', reason: 'not_a_member' };
     const user = await repo.findUserById(userId);
     if (!user) return { ok: false, status: 401, text: 'Unauthorized', reason: 'unknown_user' };
-    return { ok: true, boardId: board.data, userId, name: user.name, role };
+    return { ok: true, boardId: board.data, userId, name: user.name, role, jti: session.jti ?? '' };
   };
 
   app.server.on('upgrade', (req, socket, head) => {
@@ -207,17 +269,33 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     // Errors on the raw socket before the handshake completes (client went away) must not crash us.
     socket.on('error', (err) => log.debug({ err }, 'upgrade socket error'));
     authorizeUpgrade(req)
-      .then((result) => {
+      .then(async (result) => {
         if (!result.ok) {
           log.info({ status: result.status, reason: result.reason }, 'upgrade refused');
           return refuse(socket, result.status, result.text);
         }
-        const { boardId, userId, name, role } = result;
-        if (!limits.open(userId)) {
+        const { boardId, userId, name, role, jti } = result;
+        let allowed: boolean;
+        try {
+          allowed = await limits.open(userId, connId);
+        } catch (err) {
+          log.warn({ err: { message: (err as Error).message } }, 'upgrade refused: socket count unavailable (Redis)');
+          return refuse(socket, 503, 'Service Unavailable');
+        }
+        if (!allowed) {
           log.warn({ userId, boardId }, 'upgrade refused: too many sockets');
           return refuse(socket, 429, 'Too Many Requests');
         }
-        wss.handleUpgrade(req, socket, head, (ws) =>
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          live.set(connId, { userId, connId });
+          const sessionSockets = bySession.get(jti) ?? new Set<WebSocket>();
+          sessionSockets.add(ws);
+          bySession.set(jti, sessionSockets);
+          ws.on('close', () => {
+            live.delete(connId);
+            sessionSockets.delete(ws);
+            if (sessionSockets.size === 0) bySession.delete(jti);
+          });
           handleConnection(ws, { boardId, userId, name, role }, {
             connId,
             rooms,
@@ -226,8 +304,8 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
             msgsPerSec: config.ws.msgsPerSec,
             msgsBurst: config.ws.msgsBurst,
             metrics,
-          }),
-        );
+          });
+        });
       })
       .catch((err: unknown) => {
         log.error({ err }, 'upgrade failed');
@@ -244,6 +322,7 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     await rooms.closeAll();
     await writer.close();
     await database.pool.end();
+    bus.close();
     redis.disconnect();
   });
 
@@ -262,5 +341,5 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
     app.log.info('graceful shutdown complete');
   };
 
-  return { app, rooms, repo, database, redis, metrics, shutdown };
+  return { app, rooms, repo, database, redis, bus, writer, metrics, shutdown };
 }

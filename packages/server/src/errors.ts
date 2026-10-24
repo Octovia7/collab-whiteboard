@@ -29,7 +29,17 @@ const TRANSIENT_CODES = new Set([
   '08004',
   '08006',
 ]);
-const TRANSIENT_MESSAGES = [/connection terminated/i, /timeout exceeded when trying to connect/i, /connection timeout/i, /query read timeout/i];
+const TRANSIENT_MESSAGES = [
+  /connection terminated/i,
+  /timeout exceeded when trying to connect/i,
+  /connection timeout/i,
+  /query read timeout/i,
+  // ioredis, while Redis is unreachable
+  /connection is closed/i,
+  /max retries per request/i,
+  /command timed out/i,
+  /stream isn't writeable/i,
+];
 
 /**
  * True for errors worth retrying: lost or refused connections, timeouts, shutdowns.

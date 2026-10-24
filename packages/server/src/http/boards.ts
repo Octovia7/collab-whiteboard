@@ -9,10 +9,13 @@ const memberParams = boardParams.extend({ userId: z.string().uuid() });
 const titleBody = z.object({ title: z.string().trim().min(1).max(120) });
 // Only the creator is ever owner; members are invited as editor or viewer.
 const memberRole = z.enum(['editor', 'viewer']);
+/** Share link tokens are 32 random bytes, base64url (43 characters). */
+const tokenParams = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 
 /**
- * Boards and members (system-design.md, "REST API"). Non-members get 404 rather than 403,
- * so board ids can't be probed. Role changes and removals reach open sockets immediately.
+ * Boards, members and share links (system-design.md, "REST API"). Non-members get 404 rather
+ * than 403, so board ids can't be probed. Role changes and removals reach open sockets
+ * immediately, on every server.
  */
 export function registerBoardRoutes(app: FastifyInstance, repo: Repo, rooms: RoomManager): void {
   const notFound = (reply: FastifyReply) => reply.code(404).send({ error: 'board_not_found' });
@@ -105,5 +108,40 @@ export function registerBoardRoutes(app: FastifyInstance, repo: Repo, rooms: Roo
     await repo.removeMember(params.data.id, params.data.userId);
     rooms.removeMember(params.data.id, params.data.userId); // their sockets are closed
     return reply.code(204).send();
+  });
+
+  // ---- share links ----
+
+  app.get('/api/boards/:id/link', { preHandler: requireUser }, async (req, reply) => {
+    const params = boardParams.safeParse(req.params);
+    if (!params.success) return notFound(reply);
+    const role = await repo.getRole(params.data.id, userId(req));
+    if (!role) return notFound(reply);
+    if (role !== 'owner') return forbidden(reply);
+    return { link: await repo.getLink(params.data.id) };
+  });
+
+  // On, off, or a different role. Every change makes a new token, so the old link stops working.
+  app.put('/api/boards/:id/link', { preHandler: requireUser }, async (req, reply) => {
+    const params = boardParams.safeParse(req.params);
+    const body = z.object({ role: memberRole.nullable() }).safeParse(req.body);
+    if (!params.success) return notFound(reply);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_input' });
+    const role = await repo.getRole(params.data.id, userId(req));
+    if (!role) return notFound(reply);
+    if (role !== 'owner') return forbidden(reply);
+    return { link: await repo.setLink(params.data.id, body.data.role) };
+  });
+
+  // Anyone logged in with a valid link becomes a member with the link's role. An unknown,
+  // rotated or disabled token, or a deleted board, all look the same: 404.
+  app.post('/api/join/:token', { preHandler: requireUser }, async (req, reply) => {
+    const params = tokenParams.safeParse(req.params);
+    if (!params.success) return reply.code(404).send({ error: 'link_not_found' });
+    const joined = await repo.joinByToken(params.data.token, userId(req));
+    if (!joined) return reply.code(404).send({ error: 'link_not_found' });
+    // A viewer raised to editor by an editor link: their open sockets switch right away.
+    if (joined.changed && joined.board.role !== 'owner') rooms.setRole(joined.board.id, userId(req), joined.board.role);
+    return { board: joined.board };
   });
 }

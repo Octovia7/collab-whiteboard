@@ -16,14 +16,20 @@ export interface StoredOp {
  * (CLAUDE.md rule 8). Milestone 5 implements this with batched Postgres inserts (OpWriter).
  */
 export interface OpStore {
-  append(ops: StoredOp[]): Promise<void>;
+  /**
+   * Resolves once the ops are committed, with the opIds that could not be stored because
+   * their seq was already taken by another op (a reset Redis counter racing an in-flight op).
+   * Those are not acked; their authors resend them and they get new seqs.
+   */
+  append(ops: StoredOp[]): Promise<string[]>;
 }
 
-/** Milestone 4 stand-in: "commits" instantly to memory. Nothing survives a restart. */
+/** In-memory stand-in for unit tests: "commits" instantly. Nothing survives a restart. */
 export class MemoryOpStore implements OpStore {
   readonly ops: StoredOp[] = [];
 
-  async append(ops: StoredOp[]): Promise<void> {
+  async append(ops: StoredOp[]): Promise<string[]> {
     this.ops.push(...ops);
+    return [];
   }
 }

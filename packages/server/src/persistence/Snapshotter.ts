@@ -14,9 +14,15 @@ import type { Repo } from './repo';
  * S), then we wait until the OpWriter has committed everything appended so far (which covers
  * every op <= S), and only then write it.
  *
- * One snapshot per room at a time via an in-process flag; with several servers this becomes
- * the Redis lock `snap-lock:{boardId}` (milestone 8).
+ * One snapshot per board at a time: an in-process flag per room, plus the Redis lock
+ * `snap-lock:{boardId}` across servers (a server that doesn't get it skips this round).
+ *
+ * The snapshot is labelled with the room's watermark `upTo`: every op up to it is in the
+ * state. The state may also hold later ops that arrived out of order; loading re-applies them
+ * from the log, which LWW makes harmless.
  */
+export type SnapshotLock = (boardId: string) => Promise<(() => Promise<void>) | null>;
+
 export class Snapshotter {
   constructor(
     private readonly repo: Repo,
@@ -28,6 +34,8 @@ export class Snapshotter {
     /** Tombstones whose delete committed longer ago than this are removed at snapshot time. */
     private readonly tombstoneTtlMs = 24 * 60 * 60 * 1000,
     private readonly now: () => number = Date.now,
+    /** Cross-server lock (Redis); none in single-process tests. */
+    private readonly lock?: SnapshotLock,
   ) {}
 
   /** Called by the room after it accepts ops. */
@@ -49,17 +57,29 @@ export class Snapshotter {
     const s = room.snapshots;
     if (s.timer) clearTimeout(s.timer);
     s.timer = null;
-    if (s.running || room.currentSeq <= s.lastSeq) return;
+    if (s.running || room.upTo <= s.lastSeq) return;
     s.running = true;
     const started = performance.now();
+    let release: (() => Promise<void>) | null = null;
     try {
+      if (this.lock) {
+        release = await this.lock(room.boardId).catch((err: unknown) => {
+          this.log.warn({ err: { message: (err as Error).message }, boardId: room.boardId }, 'snapshot lock unavailable (Redis)');
+          return null;
+        });
+        if (!release) {
+          // Another server is snapshotting this board (or Redis is down): try again later.
+          this.retryLater(room);
+          return;
+        }
+      }
       // Tombstone GC (algorithms.md §4), before capturing, so the snapshot no longer has them.
       const collected = room.collectTombstones(this.now() - this.tombstoneTtlMs);
       if (collected > 0) {
         this.metrics?.tombstonesCollected.inc(collected);
         this.log.info({ boardId: room.boardId, collected }, 'tombstones collected');
       }
-      const seq = room.currentSeq;
+      const seq = room.upTo;
       const state = room.persistentState();
       const covered = s.opsSince;
       await this.writer.drain();
@@ -77,8 +97,19 @@ export class Snapshotter {
       this.log.error({ err, boardId: room.boardId }, 'snapshot failed; will retry on the next trigger');
     } finally {
       s.running = false;
+      await release?.().catch(() => {}); // expires on its own after 30 s anyway
     }
     // Ops that arrived while we were writing may already be past the threshold.
     if (s.opsSince >= this.everyOps) void this.snapshot(room);
+  }
+
+  /** Schedules another attempt after `everyMs`, unless one is already scheduled. */
+  private retryLater(room: Room): void {
+    const s = room.snapshots;
+    if (s.timer) return;
+    s.timer = setTimeout(() => {
+      s.timer = null;
+      void this.snapshot(room);
+    }, this.everyMs);
   }
 }
