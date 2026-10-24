@@ -7,6 +7,8 @@ import { loadConfig } from '../../packages/server/src/config';
 import { BoardStore } from '../../packages/client/src/store/BoardStore';
 import { Presence } from '../../packages/client/src/store/Presence';
 import { SyncClient } from '../../packages/client/src/sync/SyncClient';
+import type { SyncOptions } from '../../packages/client/src/sync/SyncClient';
+import type { Op } from '@whiteboard/shared';
 import { dbUrl, truncateAll } from './db';
 
 export const DB_URL = dbUrl('whiteboard_test');
@@ -86,7 +88,13 @@ export async function waitFor(cond: () => boolean, what: string, ms = 5000): Pro
 const started: SyncClient[] = [];
 
 /** A signed-in tab: BoardStore + SyncClient connected to the server on `port`. */
-export async function tab(port: number, boardId: string, cookie: string, clientId: string, options: { heartbeatMs?: number } = {}) {
+export async function tab(
+  port: number,
+  boardId: string,
+  cookie: string,
+  clientId: string,
+  { restored, ...options }: { heartbeatMs?: number; queue?: SyncOptions['queue']; restored?: Op[] } = {},
+) {
   const store = new BoardStore(clientId);
   const presence = new Presence();
   const sync = new SyncClient(store, {
@@ -98,6 +106,8 @@ export async function tab(port: number, boardId: string, cookie: string, clientI
     presence,
   });
   started.push(sync);
+  // As the app does: ops from the offline queue are restored before connecting.
+  if (restored) sync.restore(restored);
   sync.start();
   await waitFor(() => sync.status === 'connected', `${clientId} to connect`);
   return { store, sync, presence };

@@ -1,4 +1,4 @@
-import { FINAL_CLOSE_CODES, LIMITS, PRESENCE, SERVICE_RESTART, parseServerMessage } from '@whiteboard/shared';
+import { CLOSE, FINAL_CLOSE_CODES, LIMITS, PRESENCE, SERVICE_RESTART, parseServerMessage } from '@whiteboard/shared';
 import type { ClientMessage, Op, Role, ServerMessage } from '@whiteboard/shared';
 import { Emitter } from '../lib/Emitter';
 import type { BoardStore } from '../store/BoardStore';
@@ -29,6 +29,8 @@ export interface SyncOptions {
   WebSocketImpl?: typeof WebSocket;
   /** Where other people's cursors and selections go. */
   presence?: Presence;
+  /** Gets every unacked op whenever that set changes, to survive a reload (OfflineQueue). */
+  queue?: { save(ops: readonly Op[]): void };
 }
 
 /**
@@ -38,9 +40,9 @@ export interface SyncOptions {
  * - sent ops stay in `pending` until the server acks them, i.e. until they are durable;
  * - ops from other users go into the store with `receive`, where LWW decides;
  * - a reject rolls the shape back to the server's registers.
- * - a dropped socket is reopened with backoff; the new welcome brings the full board and every
- *   unacked op is resent, which is safe because the server dedupes by opId. (Catch-up from
- *   lastSeq instead of a full snapshot arrives in milestone 7.)
+ * - a dropped socket is reopened with backoff; the welcome brings what we missed (or a full
+ *   snapshot) and every unacked op is resent, which is safe because the server dedupes by opId;
+ * - unacked ops are also handed to the offline queue, so a reload or closed tab loses nothing.
  */
 export class SyncClient {
   readonly events = new Emitter<{ status: ConnectionStatus; welcome: undefined; role: Role }>();
@@ -100,7 +102,7 @@ export class SyncClient {
     return this.outbox.length + this.pending.size;
   }
 
-  /** Highest server seq seen; milestone 7 sends it in `hello` to catch up after a drop. */
+  /** Highest server seq seen; sent in `hello` to catch up after a drop. */
   get seq(): number {
     return this.lastSeq;
   }
@@ -127,6 +129,7 @@ export class SyncClient {
     this.watchNetwork();
     this.offSubmit = this.store.events.on('submit', ({ ops }) => {
       for (const op of ops) enqueueCoalesced(this.outbox, op);
+      this.persist();
       this.scheduleFlush();
     });
     this.open();
@@ -185,6 +188,21 @@ export class SyncClient {
     if (this.welcomed) this.send({ t: 'typing', id });
   }
 
+  /**
+   * Ops a previous page load made but never got acked (from the offline queue). Our clock
+   * observes their stamps first: they may have been made by an earlier clientId with a later
+   * time than anything we've seen, and our next edit must still win over them. Then they're
+   * applied locally and queued like any unacked op; a snapshot welcome re-applies them on top.
+   */
+  restore(ops: readonly Op[]): void {
+    if (ops.length === 0) return;
+    for (const op of ops) this.store.clock.observe(op.stamp);
+    this.store.reapply([...ops]);
+    for (const op of ops) enqueueCoalesced(this.outbox, op);
+    this.persist();
+    this.scheduleFlush();
+  }
+
   /** Sends everything queued now instead of waiting for the timer. */
   flush(): void {
     const socket = this.socket;
@@ -225,6 +243,13 @@ export class SyncClient {
       if (FINAL_CLOSE_CODES.includes(e.code)) {
         // The server ended this for good (board deleted, removed, protocol violation).
         this.finalReason = e.reason || 'closed';
+        // No board, or no longer a member: these edits can never be sent, so don't keep them.
+        // After a policy violation (1008) they stay saved; a reload sends them.
+        if (e.code === CLOSE.removedFromBoard || e.code === CLOSE.boardDeleted) {
+          this.outbox = [];
+          this.pending.clear();
+          this.persist();
+        }
         this.setStatus('disconnected');
         return;
       }
@@ -287,12 +312,14 @@ export class SyncClient {
         return;
       case 'ack':
         for (const id of msg.opIds) this.pending.delete(id);
+        this.persist();
         this.lastSeq = Math.max(this.lastSeq, msg.seq);
         this.flush(); // room in the in-flight window again
         return;
       case 'reject': {
         const op = this.pending.get(msg.opId);
         this.pending.delete(msg.opId);
+        this.persist();
         const shapeId = op ? (op.kind === 'create' ? op.shape.id : op.id) : msg.shape?.id;
         console.warn(`sync: op ${msg.opId} rejected (${msg.reason})`);
         if (!shapeId) return;
@@ -358,6 +385,10 @@ export class SyncClient {
       window.removeEventListener('offline', offline);
       window.removeEventListener('online', online);
     };
+  }
+
+  private persist(): void {
+    this.options.queue?.save([...this.pending.values(), ...this.outbox]);
   }
 
   private scheduleFlush(): void {

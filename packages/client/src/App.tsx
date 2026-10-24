@@ -12,6 +12,8 @@ import { BoardStore } from './store/BoardStore';
 import { History } from './store/History';
 import { Presence } from './store/Presence';
 import { Selection } from './store/Selection';
+import { openBrowserQueue } from './sync/OfflineQueue';
+import type { OfflineQueue } from './sync/OfflineQueue';
 import { SyncClient } from './sync/SyncClient';
 import { ToolController } from './tools/ToolController';
 import { ConnectionBadge } from './ui/ConnectionBadge';
@@ -36,12 +38,15 @@ interface Board {
   tools: ToolController;
   /** Set once the renderer exists; tools ask for overlay redraws through it. */
   redrawOverlay: { current: () => void };
+  /** This tab's offline queue, once opened (null where IndexedDB or Web Locks are unavailable). */
+  queue: { current: OfflineQueue | null };
 }
 
 function createBoard(boardId: string): Board {
   const store = new BoardStore(newClientId());
   const presence = new Presence();
-  const sync = new SyncClient(store, { url: socketUrl(boardId), boardId, presence });
+  const queue: Board['queue'] = { current: null };
+  const sync = new SyncClient(store, { url: socketUrl(boardId), boardId, presence, queue: { save: (ops) => queue.current?.save(ops) } });
   const camera = new Camera();
   // Start with a small margin so the first shapes aren't flush against the corner.
   camera.x = -40;
@@ -50,7 +55,7 @@ function createBoard(boardId: string): Board {
   const redrawOverlay = { current: () => {} };
   const history = new History(store);
   const tools = new ToolController(store, selection, camera, () => redrawOverlay.current(), undefined, history);
-  return { boardId, store, sync, presence, history, camera, selection, tools, redrawOverlay };
+  return { boardId, store, sync, presence, history, camera, selection, tools, redrawOverlay, queue };
 }
 
 interface Props {
@@ -73,7 +78,7 @@ export function App({ board: summary, user, onLogout }: Props) {
     const scene = sceneRef.current;
     const overlay = overlayRef.current;
     if (!container || !scene || !overlay) return;
-    const { store, sync, presence, camera, selection, tools, redrawOverlay } = board;
+    const { store, sync, presence, camera, selection, tools, redrawOverlay, queue } = board;
 
     const renderer = new Renderer(container, scene, overlay, store, camera);
     const visibleBounds = (id: string) => (store.isVisible(id) ? store.boundsOf(id) : undefined);
@@ -116,13 +121,33 @@ export function App({ board: summary, user, onLogout }: Props) {
     const offWelcome = sync.events.on('welcome', () => {
       if (demo > 0 && store.size === 0) seedDemo(store, demo);
     });
-    sync.start();
+    // Offline queue first: edits saved by an earlier load of this tab, or by closed tabs, are
+    // restored (and the clock observes their stamps) before this tab can make any edit of its
+    // own, so tools stay read-only until then. Only then connect, so they go out with the hello.
+    let disposed = false;
+    tools.setReadOnly(true);
+    void openBrowserQueue(board.boardId, user.id, () => disposed).then((opened) => {
+      if (disposed) {
+        opened?.queue.close();
+        return;
+      }
+      if (opened) {
+        queue.current = opened.queue;
+        sync.restore(opened.restored);
+      }
+      tools.setReadOnly(sync.role === 'viewer');
+      sync.start();
+    });
     // Dev/test builds only: the constant check lets the production bundle drop debug.ts.
     const uninstallDebug = import.meta.env.DEV ? installDebugHandle(board) : () => {};
 
     return () => {
       uninstallDebug();
+      disposed = true;
       sync.stop();
+      // Unsent edits stay saved; releasing the lock lets the next load adopt them.
+      queue.current?.close();
+      queue.current = null;
       offRole();
       offEditing();
       offWelcome();
@@ -135,7 +160,7 @@ export function App({ board: summary, user, onLogout }: Props) {
       redrawOverlay.current = () => {};
       renderer.stop();
     };
-  }, [board]);
+  }, [board, user.id]);
 
   const getCenter = useCallback(() => {
     const el = containerRef.current;

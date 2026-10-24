@@ -4,6 +4,7 @@ import type { BoardStore } from './store/BoardStore';
 import type { History } from './store/History';
 import type { Presence } from './store/Presence';
 import type { Selection } from './store/Selection';
+import type { OfflineQueue } from './sync/OfflineQueue';
 import type { ConnectionStatus, SyncClient } from './sync/SyncClient';
 import type { ToolController } from './tools/ToolController';
 
@@ -46,6 +47,8 @@ export interface DebugHandle {
   history(): { canUndo: boolean; canRedo: boolean };
   /** How the last welcome arrived: a full snapshot or catch-up ops (and how many). */
   lastWelcome(): { kind: 'snapshot' | 'ops'; ops: number } | null;
+  /** This tab's offline queue: tab ID, ops its last completed write saved, ops restored on load. */
+  offlineQueue(): { tabId: string; saved: number; restored: number } | null;
 }
 
 declare global {
@@ -66,8 +69,9 @@ export function installDebugHandle(parts: {
   camera: Camera;
   selection: Selection;
   tools: ToolController;
+  queue: { current: OfflineQueue | null };
 }): () => void {
-  const { boardId, store, sync, presence, history, camera, selection, tools } = parts;
+  const { boardId, store, sync, presence, history, camera, selection, tools, queue } = parts;
   window.__board = Object.freeze({
     boardId,
     clientId: store.clientId,
@@ -97,6 +101,7 @@ export function installDebugHandle(parts: {
     typingIn: (noteId: string) => presence.typingIn(noteId)?.name ?? null,
     history: () => ({ canUndo: history.canUndo, canRedo: history.canRedo }),
     lastWelcome: () => (sync.lastWelcome ? { ...sync.lastWelcome } : null),
+    offlineQueue: () => (queue.current ? { tabId: queue.current.tabId, saved: queue.current.savedCount, restored: queue.current.restoredCount } : null),
   });
   return () => {
     delete window.__board;
