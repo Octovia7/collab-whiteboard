@@ -38,6 +38,7 @@ pnpm typecheck && pnpm lint
 # Production stack (cp .env.prod.example .env.prod and fill in secrets first; .env.prod is never committed)
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --wait   # app on :8080
 pnpm test:smoke               # Playwright smoke test against the running production stack
+node scripts/measure-startup.mjs 3   # recreate the prod server container 3x; prints startup phases and time to healthy
 ```
 
 Keep these scripts working; add new ones to this list when you create them.
@@ -193,7 +194,12 @@ Deferred items are tracked in "Known limitations" above.
 Production hardening pass (branch `hardening`, merged): everything in "Production standards" above. Verified with the
 production stack on this machine: images build (client 74 MB, server ~250 MB), stack healthy, smoke test passes (sign up,
 draw, reload, shape persists, strict CSP, Secure/httpOnly cookie, /metrics and /readyz not public), production logs have
-no warnings and no secrets. A cold server container is healthy in ~22 s (bundle minified to 1.4 MB).
+no warnings and no secrets.
+Startup (fixed in `m6-followups`): the server logs `startup complete` with phase timings. Causes found: source-map parsing
+at runtime (`--enable-source-maps`, removed; maps still shipped, enable with NODE_OPTIONS when debugging) and the 10 s
+health-check interval (now `--start-interval=1s`). Node phases 2.3-3.5 s -> 1.2-2.3 s; container started -> healthy
+3.9-4.4 s (was 9-21 s + up to 10 s check lag). The rest is Docker Desktop on this Windows machine: an empty `/bin/true`
+container takes 5-12 s to create/run here, which no app change affects.
 
 Milestone 6 done and merged: pen tool (create + append chunk 0 in one batch, 50 ms chunks, unsent tail drawn on the
 overlay, pen-up `points` = iterative RDP with epsilon 1 screen px), midpoint quadratic Bezier smoothing at draw time,

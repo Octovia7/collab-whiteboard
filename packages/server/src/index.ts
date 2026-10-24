@@ -6,6 +6,17 @@ import { runMigrations } from './db/client';
 /** Hard cap on graceful shutdown; orchestrators usually SIGKILL after 30 s. */
 const SHUTDOWN_TIMEOUT_MS = 25_000;
 
+// Startup phase timings, logged once listening ("startup complete"). performance.now() counts
+// from process start, so the first mark includes Node's own boot and loading this bundle.
+const phases: Record<string, number> = {};
+let mark = 0;
+const phase = (name: string) => {
+  const now = performance.now();
+  phases[name] = Math.round(now - mark);
+  mark = now;
+};
+phase('process_and_module_load');
+
 let config: Config;
 try {
   config = loadConfig();
@@ -14,8 +25,10 @@ try {
   console.error(err instanceof ConfigError ? err.message : err);
   process.exit(1);
 }
+phase('config');
 
 const { app, database, shutdown } = await buildApp(config);
+phase('build_app');
 
 const stop = (code: number) => {
   const timer = setTimeout(() => {
@@ -52,7 +65,10 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 try {
   // Migrations run on every deploy/start, serialized by an advisory lock across replicas.
   await runMigrations(database.pool, config.migrationsDir);
+  phase('migrations');
   await app.listen({ port: config.port, host: config.host });
+  phase('listen');
+  app.log.info({ phases, startup_ms: Math.round(performance.now()) }, 'startup complete');
 } catch (err) {
   app.log.fatal({ err }, 'failed to start');
   process.exit(1);
