@@ -1,0 +1,162 @@
+{
+  "startedAt": "2026-10-24T16:25:10.633Z",
+  "workers": 2,
+  "moveMs": 200,
+  "cursorMs": 50,
+  "settleMs": 5000,
+  "measureMs": 30000,
+  "minFreeMb": 500,
+  "stoppedEarly": "after 20 bots: free RAM fell to 409 MB (< 500 MB)",
+  "results": [
+    {
+      "bots": 10,
+      "perReplica": [
+        5,
+        5
+      ],
+      "same": {
+        "n": 5928,
+        "p50": 6.5,
+        "p95": 21.4,
+        "p99": 40.5,
+        "max": 120.7
+      },
+      "cross": {
+        "n": 7410,
+        "p50": 8.5,
+        "p95": 24.7,
+        "p99": 42.5,
+        "max": 128.3
+      },
+      "all": {
+        "n": 13338,
+        "p50": 7.6,
+        "p95": 23.6,
+        "p99": 41.9,
+        "max": 128.3
+      },
+      "opsPerSec": {
+        "sent": 49,
+        "acked": 49,
+        "expected": 50
+      },
+      "deliveriesPerSec": 444,
+      "problems": {
+        "rejected": 0,
+        "closed": 0,
+        "saving": 0,
+        "refused": 0
+      },
+      "generator": {
+        "cpuPct": 23,
+        "rssMb": 101
+      },
+      "hostFreeRamMb": {
+        "min": 599,
+        "atStart": 800
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 15,
+          "cpuMax": 21,
+          "memMaxMb": 15
+        },
+        "server-1": {
+          "cpuAvg": 31,
+          "cpuMax": 40,
+          "memMaxMb": 62
+        },
+        "server-2": {
+          "cpuAvg": 30,
+          "cpuMax": 41,
+          "memMaxMb": 45
+        },
+        "postgres-1": {
+          "cpuAvg": 4,
+          "cpuMax": 10,
+          "memMaxMb": 41
+        },
+        "redis-1": {
+          "cpuAvg": 7,
+          "cpuMax": 17,
+          "memMaxMb": 4
+        }
+      }
+    },
+    {
+      "bots": 20,
+      "perReplica": [
+        10,
+        10
+      ],
+      "same": {
+        "n": 27800,
+        "p50": 140,
+        "p95": 1980,
+        "p99": 2480,
+        "max": 2661
+      },
+      "cross": {
+        "n": 31026,
+        "p50": 200.2,
+        "p95": 2060,
+        "p99": 2540,
+        "max": 2713.9
+      },
+      "all": {
+        "n": 58826,
+        "p50": 169.2,
+        "p95": 2020,
+        "p99": 2510,
+        "max": 2713.9
+      },
+      "opsPerSec": {
+        "sent": 100,
+        "acked": 103,
+        "expected": 100
+      },
+      "deliveriesPerSec": 1959,
+      "problems": {
+        "rejected": 0,
+        "closed": 0,
+        "saving": 0,
+        "refused": 0
+      },
+      "generator": {
+        "cpuPct": 66,
+        "rssMb": 82
+      },
+      "hostFreeRamMb": {
+        "min": 409,
+        "atStart": 409
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 89,
+          "cpuMax": 104,
+          "memMaxMb": 15
+        },
+        "server-1": {
+          "cpuAvg": 105,
+          "cpuMax": 113,
+          "memMaxMb": 70
+        },
+        "server-2": {
+          "cpuAvg": 113,
+          "cpuMax": 144,
+          "memMaxMb": 67
+        },
+        "postgres-1": {
+          "cpuAvg": 12,
+          "cpuMax": 17,
+          "memMaxMb": 45
+        },
+        "redis-1": {
+          "cpuAvg": 22,
+          "cpuMax": 29,
+          "memMaxMb": 5
+        }
+      }
+    }
+  ]
+}

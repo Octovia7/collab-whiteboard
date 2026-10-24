@@ -1,0 +1,87 @@
+{
+  "startedAt": "2026-10-24T16:23:47.169Z",
+  "workers": 2,
+  "moveMs": 200,
+  "cursorMs": 50,
+  "settleMs": 5000,
+  "measureMs": 30000,
+  "minFreeMb": 500,
+  "stoppedEarly": "after 10 bots: free RAM fell to 433 MB (< 500 MB)",
+  "results": [
+    {
+      "bots": 10,
+      "perReplica": [
+        4,
+        6
+      ],
+      "same": {
+        "n": 6216,
+        "p50": 7.4,
+        "p95": 42.5,
+        "p99": 91.6,
+        "max": 215
+      },
+      "cross": {
+        "n": 7104,
+        "p50": 9.9,
+        "p95": 46.9,
+        "p99": 96.4,
+        "max": 241.3
+      },
+      "all": {
+        "n": 13320,
+        "p50": 8.7,
+        "p95": 44.7,
+        "p99": 93.1,
+        "max": 241.3
+      },
+      "opsPerSec": {
+        "sent": 49,
+        "acked": 50,
+        "expected": 50
+      },
+      "deliveriesPerSec": 444,
+      "problems": {
+        "rejected": 0,
+        "closed": 0,
+        "saving": 0,
+        "refused": 0
+      },
+      "generator": {
+        "cpuPct": 20,
+        "rssMb": 88
+      },
+      "hostFreeRamMb": {
+        "min": 433,
+        "atStart": 652
+      },
+      "containers": {
+        "client-1": {
+          "cpuAvg": 17,
+          "cpuMax": 26,
+          "memMaxMb": 15
+        },
+        "server-1": {
+          "cpuAvg": 30,
+          "cpuMax": 39,
+          "memMaxMb": 67
+        },
+        "server-2": {
+          "cpuAvg": 29,
+          "cpuMax": 40,
+          "memMaxMb": 53
+        },
+        "postgres-1": {
+          "cpuAvg": 5,
+          "cpuMax": 9,
+          "memMaxMb": 45
+        },
+        "redis-1": {
+          "cpuAvg": 8,
+          "cpuMax": 12,
+          "memMaxMb": 4
+        }
+      }
+    }
+  ]
+}
