@@ -5,7 +5,7 @@ import type { OpStore, StoredOp } from '../persistence/OpStore';
 import { Room } from './Room';
 import type { Peer } from './Room';
 
-const PRESENCE_TYPES = new Set(['peer-join', 'peer-leave', 'cursor', 'select']);
+const PRESENCE_TYPES = new Set(['peer-join', 'peer-leave', 'cursor', 'select', 'typing']);
 let peerCounter = 0;
 
 /** A fake socket. Presence messages land in `presence`, everything else in `inbox`. */
@@ -53,7 +53,7 @@ describe('Room', () => {
     await room.handleOps(a, [create('c-1', 1)]);
     const welcome = room.join(peer('ub'));
     expect(welcome).toMatchObject({ t: 'welcome', seq: 1, role: 'editor', you: { userId: 'ub' } });
-    expect(welcome.t === 'welcome' && welcome.snapshot.shapes.map((s) => s.id)).toEqual(['c-1']);
+    expect(welcome.t === 'welcome' && welcome.snapshot?.shapes.map((s) => s.id)).toEqual(['c-1']);
   });
 
   it('assigns seqs, broadcasts to others, stores with the socket userId, and acks the sender', async () => {
@@ -238,9 +238,11 @@ describe('Room: presence', () => {
     room.join(b);
     room.relayPresence(a, { t: 'cursor', x: 10, y: 20 });
     room.relayPresence(a, { t: 'select', ids: ['x-1'] });
-    expect(b.presence.slice(-2)).toEqual([
+    room.relayPresence(a, { t: 'typing', id: 'x-1' });
+    expect(b.presence.slice(-3)).toEqual([
       { t: 'cursor', peerId: a.peerId, x: 10, y: 20 },
       { t: 'select', peerId: a.peerId, ids: ['x-1'] },
+      { t: 'typing', peerId: a.peerId, id: 'x-1' },
     ]);
     expect(a.presence.some((m) => m.t === 'cursor')).toBe(false); // not echoed back
     expect(room.snapshot().shapes).toEqual([]);
@@ -257,5 +259,85 @@ describe('Room: presence', () => {
     room.join(stale);
     expect(room.sweep(50)).toBe(1);
     expect([fresh.terminated, stale.terminated]).toEqual([false, true]);
+  });
+});
+
+describe('Room: catch-up and tombstone GC', () => {
+  const del = (id: string, t: number): Op => ({ kind: 'update', opId: `op-d-${id}-${t}`, stamp: stamp(t), id, props: { deleted: true } });
+  const undel = (id: string, t: number): Op => ({ kind: 'update', opId: `op-ud-${id}-${t}`, stamp: stamp(t), id, props: { deleted: false } });
+
+  it('a client with lastSeq inside the log gets only the ops after it', async () => {
+    const room = new Room('b', new MemoryOpStore());
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1), update('c-1', 2, 5), update('c-1', 3, 6)]);
+    const back = peer('ua');
+    const welcome = room.join(back, 1);
+    expect(welcome).toMatchObject({ t: 'welcome', seq: 3, ops: [update('c-1', 2, 5), update('c-1', 3, 6)] });
+    expect(welcome.t === 'welcome' && welcome.snapshot).toBeUndefined();
+    expect(room.join(peer('ua'), 3)).toMatchObject({ ops: [] }); // up to date: nothing to send
+  });
+
+  it('first joins, lastSeq from the future, and lastSeq below the log floor get a snapshot', async () => {
+    const room = new Room('b', new MemoryOpStore());
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1), update('c-1', 2, 5), update('c-1', 3, 6)]);
+    expect(room.join(peer('x'), 0)).toHaveProperty('snapshot');
+    expect(room.join(peer('x'), 99)).toHaveProperty('snapshot');
+    room.trimLog(2); // a snapshot pruned ops <= 2
+    expect(room.join(peer('x'), 1)).toHaveProperty('snapshot');
+    expect(room.join(peer('x'), 2)).toMatchObject({ ops: [update('c-1', 3, 6)] });
+  });
+
+  it('caps the log; clients older than what was dropped get a snapshot', async () => {
+    const room = new Room('b', new MemoryOpStore(), { maxLogOps: 2 });
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('c-1', 1), update('c-1', 2, 5), update('c-1', 3, 6), update('c-1', 4, 7)]);
+    expect(room.catchUp(1)).toBeNull();
+    expect(room.catchUp(2)).toEqual([update('c-1', 3, 6), update('c-1', 4, 7)]);
+  });
+
+  it('collects tombstones whose delete committed before the cutoff, and only those', async () => {
+    let now = 1_000;
+    const room = new Room('b', new MemoryOpStore(), { now: () => now });
+    const a = peer('ua');
+    room.join(a);
+    await room.handleOps(a, [create('old-1', 1), create('new-1', 2), create('back-1', 3), create('live-1', 4)]);
+    await room.handleOps(a, [del('old-1', 5), del('back-1', 6)]);
+    now = 5_000;
+    await room.handleOps(a, [del('new-1', 7), undel('back-1', 8)]);
+    expect(room.collectTombstones(2_000)).toBe(1); // old-1 only: new-1 is too recent, back-1 was restored
+    expect(room.snapshot().shapes.map((s) => s.id).sort()).toEqual(['back-1', 'live-1', 'new-1']);
+    expect(room.persistentState().deletedAt).toEqual({ 'new-1': 5_000 });
+    // A client from before the GC may still hold old-1: it gets a snapshot, not catch-up.
+    expect(room.catchUp(7)).toBeNull();
+    expect(room.catchUp(8)).toEqual([]);
+    // An op for the collected shape is now unknown.
+    a.inbox.length = 0;
+    await room.handleOps(a, [update('old-1', 9, 1)]);
+    expect(a.inbox).toEqual([expect.objectContaining({ t: 'reject', reason: 'unknown_shape', shape: null })]);
+  });
+
+  it('restores tombstone ages from snapshots and from board_ops.created_at', () => {
+    const room = new Room('b', new MemoryOpStore(), { now: () => 50_000 });
+    room.restore(
+      {
+        seq: 2,
+        state: {
+          board: { shapes: [{ id: 'a-1', regs: { deleted: { value: true, stamp: stamp(2) } }, chunks: [] }, { id: 'b-1', regs: { deleted: { value: true, stamp: stamp(2) } }, chunks: [] }] },
+          creators: {},
+          deletedAt: { 'a-1': 100 },
+        },
+      },
+      [
+        { boardId: 'b', seq: 3, opId: 'x', userId: 'u', op: create('c-1', 3), createdAt: new Date(200) },
+        { boardId: 'b', seq: 4, opId: 'y', userId: 'u', op: del('c-1', 4), createdAt: new Date(300) },
+      ],
+    );
+    // a-1 from the snapshot's ages, c-1 from created_at, b-1 (no recorded age) counted from now.
+    expect(room.persistentState().deletedAt).toEqual({ 'a-1': 100, 'b-1': 50_000, 'c-1': 300 });
+    expect(room.catchUp(3)).toEqual([del('c-1', 4)]);
   });
 });

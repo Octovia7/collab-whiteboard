@@ -61,6 +61,11 @@ export const boardOps = pgTable(
 export interface SnapshotState {
   board: BoardSnapshot;
   creators: Record<string, string>;
+  /**
+   * Tombstone ages: shape id -> server commit time (epoch ms) of the op that set
+   * `deleted: true`. Absent in snapshots written before milestone 7.
+   */
+  deletedAt?: Record<string, number>;
 }
 
 export const boardSnapshots = pgTable(

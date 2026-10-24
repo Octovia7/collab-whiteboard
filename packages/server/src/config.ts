@@ -45,6 +45,8 @@ const schema = z.object({
   /** Presence: drop a socket after this long without any message (clients send a heartbeat every 5 s). */
   PRESENCE_TIMEOUT_MS: int(1000).default(15_000),
   PRESENCE_SWEEP_MS: int(100).default(5_000),
+  /** Tombstones older than this (since their delete committed) are removed at snapshot time. */
+  TOMBSTONE_TTL_MS: int(0).default(24 * 60 * 60 * 1000),
   /** If set, GET /metrics requires `Authorization: Bearer <token>`. */
   METRICS_TOKEN: z.string().min(16).optional(),
   /** Where the SQL migrations are; defaults to packages/server/drizzle. */
@@ -79,6 +81,7 @@ export interface Config {
   authRateLimitPerMin: number;
   ws: { opsPerSec: number; opsBurst: number; msgsPerSec: number; msgsBurst: number; maxSocketsPerUser: number };
   presence: { timeoutMs: number; sweepMs: number };
+  tombstoneTtlMs: number;
   metricsToken: string | undefined;
   migrationsDir: string | undefined;
   /** Fault injection for E2E tests; always zero in production. */
@@ -131,6 +134,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       maxSocketsPerUser: c.WS_MAX_SOCKETS_PER_USER,
     },
     presence: { timeoutMs: c.PRESENCE_TIMEOUT_MS, sweepMs: c.PRESENCE_SWEEP_MS },
+    tombstoneTtlMs: c.TOMBSTONE_TTL_MS,
     metricsToken: c.METRICS_TOKEN,
     migrationsDir: c.MIGRATIONS_DIR,
     faults: { commitDelayMs: c.WB_FAULT_COMMIT_DELAY_MS, ackDelayMs: c.WB_FAULT_ACK_DELAY_MS },

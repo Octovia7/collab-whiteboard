@@ -5,7 +5,7 @@ const MS_BUCKETS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
 /**
  * The metrics from system-design.md ("Metrics"), in Prometheus format on GET /metrics.
  * `ops_per_second` is exposed the Prometheus way, as the counter `ops_accepted_total`
- * (rate it in the dashboard). `catchup_ops` arrives with lastSeq catch-up in milestone 7.
+ * (rate it in the dashboard).
  */
 export function createMetrics() {
   const registry = new Registry();
@@ -18,6 +18,14 @@ export function createMetrics() {
     opsRejected: new Counter({ name: 'ops_rejected_total', help: 'Ops rejected', labelNames: ['reason'], registers: [registry] }),
     wsConnections: new Gauge({ name: 'ws_connections', help: 'Open WebSocket connections', registers: [registry] }),
     roomsLoaded: new Gauge({ name: 'rooms_loaded', help: 'Boards loaded in memory', registers: [registry] }),
+    catchupOps: new Histogram({
+      name: 'catchup_ops',
+      help: 'Ops sent to a reconnecting client instead of a snapshot',
+      buckets: [0, 1, 10, 50, 100, 500, 1000, 5000, 20000],
+      registers: [registry],
+    }),
+    welcomes: new Counter({ name: 'welcomes_total', help: 'Joins, by how the board was sent', labelNames: ['kind'], registers: [registry] }),
+    tombstonesCollected: new Counter({ name: 'tombstones_collected_total', help: 'Tombstones garbage-collected at snapshot time', registers: [registry] }),
     snapshotMs: new Histogram({ name: 'snapshot_ms', help: 'Time to write a snapshot (ms)', buckets: MS_BUCKETS, registers: [registry] }),
     boardLoadMs: new Histogram({ name: 'board_load_ms', help: 'Time to load a board from Postgres (ms)', buckets: MS_BUCKETS, registers: [registry] }),
     presenceMessages: new Counter({ name: 'presence_messages_total', help: 'Cursor and selection messages relayed', labelNames: ['type'], registers: [registry] }),

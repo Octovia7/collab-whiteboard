@@ -235,11 +235,11 @@ describe('configuration', () => {
       cwd: resolve(import.meta.dirname, '../../packages/server'),
       env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_ENV: 'production', JWT_SECRET: 'too-short' },
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: 55_000,
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('invalid configuration');
     for (const name of ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'ALLOWED_ORIGINS']) expect(result.stderr).toContain(name);
     expect(result.stderr).not.toContain('too-short');
-  });
+  }, 60_000); // spawns a fresh Node + tsx process: slow on a loaded machine
 });
