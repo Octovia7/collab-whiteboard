@@ -105,6 +105,21 @@ export class OpWriter implements OpStore {
   /** Commits the batch, retrying until it succeeds; returns the opIds whose seq was taken. */
   private async commit(batch: StoredOp[]): Promise<string[]> {
     if (this.commitDelayMs > 0) await sleep(this.commitDelayMs); // fault injection (tests only)
+    // The outage clock starts when the batch's first attempt starts, not at its first failure:
+    // with Postgres frozen (not refusing), one attempt can hang for the query timeout times its
+    // retries (~60 s) before failing. The watchdog pauses saving if the batch is still not
+    // committed after pauseAfterMs, failed or not (found by the chaos test: a 40 s freeze never
+    // showed "Saving paused").
+    const firstAttemptAt = performance.now();
+    const watchdog = setTimeout(() => this.failed(firstAttemptAt), this.pauseAfterMs);
+    try {
+      return await this.commitWithRetry(batch, firstAttemptAt);
+    } finally {
+      clearTimeout(watchdog);
+    }
+  }
+
+  private async commitWithRetry(batch: StoredOp[], firstAttemptAt: number): Promise<string[]> {
     for (let attempt = 0; ; attempt++) {
       try {
         if (this.faults.failCommits) throw new Error('fault injection: commit failed');
@@ -113,7 +128,7 @@ export class OpWriter implements OpStore {
         if (notStored.length > 0) this.log.warn({ notStored: notStored.length }, 'ops not stored: seq already taken; their clients will resend');
         return notStored;
       } catch (err) {
-        this.failed();
+        this.failed(firstAttemptAt);
         const wait = Math.min(MAX_RETRY_MS, 100 * 2 ** attempt);
         this.log.error({ err, ops: batch.length, retryInMs: wait }, 'op batch insert failed; retrying');
         // Wake up in time to notice the pause threshold even mid-backoff.
@@ -126,8 +141,9 @@ export class OpWriter implements OpStore {
     return this.failingSince === null ? this.pauseAfterMs : this.failingSince + this.pauseAfterMs - performance.now();
   }
 
-  private failed(): void {
-    this.failingSince ??= performance.now();
+  /** Commits have been failing (or hanging) since `since`; pause once that's pauseAfterMs ago. */
+  private failed(since: number): void {
+    this.failingSince ??= since;
     if (!this.pausedFlag && this.untilPause() <= 0) {
       this.pausedFlag = true;
       this.log.error({ failingForMs: Math.round(performance.now() - this.failingSince) }, 'saving paused: Postgres keeps failing');
