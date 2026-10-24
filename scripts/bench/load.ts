@@ -45,7 +45,8 @@ const SETTLE_MS = Number(process.env.SETTLE_MS ?? 5_000);
 const MEASURE_MS = Number(process.env.MEASURE_MS ?? 30_000);
 const MIN_FREE_MB = Number(process.env.MIN_FREE_MB ?? 500);
 const MOVE_MS = 200;
-const CURSOR_MS = 50;
+/** Cursor interval per bot; 0 turns cursors off (to see how much of the load they are). */
+const CURSOR_MS = Number(process.env.CURSOR_MS ?? 50);
 
 const freeMb = () => Math.round(freemem() / 1024 / 1024);
 
@@ -148,10 +149,14 @@ function runWorker(): void {
                 sendOps([{ kind: 'update', opId: `${cid}:${n}`, stamp: { t: t++, client: cid }, id: shapeId, props: { x: n % 1000, text: `${index}:${nowMs().toFixed(3)}` } }]);
                 if (measuring) counters.sent++;
               }, MOVE_MS),
-              setInterval(() => {
-                if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'cursor', x: Math.round(Math.random() * 1000), y: Math.round(Math.random() * 800) }));
-              }, CURSOR_MS),
             );
+            if (CURSOR_MS > 0) {
+              bot.timers.push(
+                setInterval(() => {
+                  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'cursor', x: Math.round(Math.random() * 1000), y: Math.round(Math.random() * 800) }));
+                }, CURSOR_MS),
+              );
+            }
             resolveBot();
             return;
           case 'ops': {
@@ -267,7 +272,7 @@ async function runParent(): Promise<void> {
   const startedIso = new Date().toISOString();
   const containers = serverContainers();
   if (containers.length !== 2) throw new Error(`expected 2 server replicas, found ${containers.length}: is the production stack up?`);
-  console.log(`replicas: ${containers.map(containerName).join(', ')}; workers: ${WORKERS}; steps: ${STEPS.join(', ')}; free RAM ${freeMb()} MB of ${Math.round(totalmem() / 1024 / 1024)} MB`);
+  console.log(`replicas: ${containers.map(containerName).join(', ')}; workers: ${WORKERS}; steps: ${STEPS.join(', ')}; cursors ${CURSOR_MS > 0 ? `every ${CURSOR_MS} ms` : 'off'}; free RAM ${freeMb()} MB of ${Math.round(totalmem() / 1024 / 1024)} MB`);
 
   const owner = await signUp('owner');
   const { boardId, token } = await boardWithLink(owner.cookie, 'Load test');
