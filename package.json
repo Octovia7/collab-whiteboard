@@ -13,7 +13,9 @@
     "build:e2e": "pnpm -F @whiteboard/server build && pnpm -F @whiteboard/client exec vite build --mode e2e",
     "test:e2e": "pnpm build:e2e && playwright test",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:smoke": "playwright test --config playwright.smoke.config.ts"
+    "test:smoke": "playwright test --config playwright.smoke.config.ts",
+    "bench:load": "pnpm -F @whiteboard/server exec node --import tsx ../../scripts/bench/load.ts",
+    "bench:chaos": "pnpm -F @whiteboard/server exec node --import tsx ../../scripts/bench/chaos.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

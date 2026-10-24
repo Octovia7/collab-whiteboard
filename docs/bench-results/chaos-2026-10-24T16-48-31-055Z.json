@@ -1,0 +1,37 @@
+{
+  "startedAt": "2026-10-24T16:48:31.055Z",
+  "bots": 10,
+  "killReplica": {
+    "affectedBots": 6,
+    "allReconnectedMs": 2744
+  },
+  "redisRestart": {
+    "restartMs": 1662,
+    "botsConnectedAfterMs": 0,
+    "counterAtLeastPgMax": true,
+    "counter": 1208,
+    "pgMax": 1208,
+    "seqCollisionsLogged": 0
+  },
+  "redisFlush": {
+    "counterBefore": 1500,
+    "counterAfter": 2388,
+    "pgMax": 2388,
+    "counterAtLeastPgMax": true,
+    "seqCollisionsLogged": 0
+  },
+  "postgresPause": {
+    "pausedForMs": 40000,
+    "savingPausedShownAfterMs": 32002,
+    "botsThatSawIt": 10,
+    "resumedAfterUnpauseMs": 205
+  },
+  "verification": {
+    "ackedMarkers": 873,
+    "missingMarkers": 0,
+    "wrongFinalValues": [],
+    "divergedBoards": 0,
+    "seqCollisionsLogged": 0,
+    "settleMs": 2146
+  }
+}
