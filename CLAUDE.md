@@ -258,3 +258,9 @@ Found and fixed: nginx waited 60 s on a dead replica (now 2 s connect timeout, f
 Postgres never showed "Saving paused" (outage clock from the batch's first attempt + watchdog); cursor fan-out was O(n^2)
 (server now batches cursors: one `cursors` message per socket per 50 ms). Known limit: an overloaded replica closes sockets
 (1013) on Redis timeouts, which adds reconnect load. Benchmark results in docs/bench-results (github/, laptop/, superseded/).
+
+Milestone 10 in progress: deployed at https://collab-whiteboard-nmn6.onrender.com (Render free web service serving the
+built client via STATIC_DIR + Render Key Value, Neon Postgres; created with the Render CLI/API, see docs/deploy.md).
+Checked live: CSP/HSTS/secure cookies, two users syncing over wss (~340 ms relay from India to Oregon), persistence,
+logout revocation, browser sign-up and drawing. README written. Still to do: demo video; the repo is still private
+(owner to decide: commits carry the author's email).

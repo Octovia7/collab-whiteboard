@@ -1,5 +1,7 @@
 # Deploying the public demo (Render + Neon, free tiers)
 
+**Live at https://collab-whiteboard-nmn6.onrender.com** (Render service `collab-whiteboard`, region Oregon; Neon in AWS us-west-2).
+
 The demo runs on free tiers that need no credit card:
 
 - **Render web service** ([`render.yaml`](../render.yaml), [`deploy/render/Dockerfile`](../deploy/render/Dockerfile)): the server, which also serves the built client (`STATIC_DIR`), because the free plan runs one web service and no nginx.
