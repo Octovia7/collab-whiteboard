@@ -501,6 +501,6 @@ Milestones are built in this order; each ends with something that runs. The chec
 7. **Undo, notes, catch-up:** per-user undo/redo with inverse ops; sticky notes with textarea overlay; `lastSeq` catch-up on reconnect; tombstone GC at snapshot time (age from `board_ops.created_at` of the delete op).
 8. **Scale out and harden:** Redis pub/sub between 2 server processes, `INCR` seq, gap detection; sharing dialog and link tokens; rate limits; origin check; graceful shutdown.
 9. **Tests and numbers:** Playwright 3-browser test, chaos test, load test at 10/20/30/50 bots; fix what the tests find.
-10. **Ship:** deploy to free tiers; README with architecture diagram, algorithm list and measured results; 60-second demo video.
+10. **Ship:** deploy to free tiers; README with architecture diagram, algorithm list and measured results (the demo video was dropped).
 
 **If time runs short,** cut in this order: multi-server Redis (describe it instead), share links (keep member invites), Playwright tests (keep the convergence test). Never cut the convergence test or the load-test numbers.

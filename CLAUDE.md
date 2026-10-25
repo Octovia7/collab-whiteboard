@@ -137,7 +137,7 @@ Build milestones in this order; tick them off as they're finished.
 - [x] Undo/redo, sticky notes, reconnect + catch-up
 - [x] Redis pub/sub multi-server, sharing, rate limits
 - [x] E2E, chaos and load tests
-- [ ] Deploy, README, demo video
+- [x] Deploy, README (demo video dropped by the owner)
 
 **Session 2026-10-23:** milestone 1 done. pnpm is pinned to 10.18.3 (pnpm 12 doesn't run under Node 22.20's corepack).
 `shared` consumers import its TypeScript source directly (`exports` → `src/index.ts`); no build step yet.
@@ -259,8 +259,8 @@ Postgres never showed "Saving paused" (outage clock from the batch's first attem
 (server now batches cursors: one `cursors` message per socket per 50 ms). Known limit: an overloaded replica closes sockets
 (1013) on Redis timeouts, which adds reconnect load. Benchmark results in docs/bench-results (github/, laptop/, superseded/).
 
-Milestone 10 in progress: deployed at https://collab-whiteboard-nmn6.onrender.com (Render free web service serving the
+Milestone 10 done: deployed at https://collab-whiteboard-nmn6.onrender.com (Render free web service serving the
 built client via STATIC_DIR + Render Key Value, Neon Postgres; created with the Render CLI/API, see docs/deploy.md).
 Checked live: CSP/HSTS/secure cookies, two users syncing over wss (~340 ms relay from India to Oregon), persistence,
-logout revocation, browser sign-up and drawing. README written. Still to do: demo video; the repo is still private
-(owner to decide: commits carry the author's email).
+logout revocation, browser sign-up and drawing. README written; repo public at https://github.com/Octovia7/collab-whiteboard.
+The demo video was dropped. All milestones done.
