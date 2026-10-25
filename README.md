@@ -48,6 +48,8 @@ flowchart TB
   - **Acks:** the sender is acked only after the op is committed to Postgres.
 - **Ordering:** servers deliver ops in whatever order they get them, which LWW makes safe. Each server tracks a watermark of what it has delivered without gaps, and clients use that watermark to catch up after a disconnect.
 
+The live demo runs a single-service version of this: one server that also serves the built client, no nginx (see [Live demo limits](#live-demo-limits)).
+
 Full design: [docs/system-design.md](docs/system-design.md) (protocol, data model, failure handling, security) and [docs/algorithms.md](docs/algorithms.md).
 
 ## Algorithms (all hand-written)
@@ -116,7 +118,7 @@ pnpm bench:load           # load ramp against the production stack
 pnpm bench:chaos          # chaos tests against the production stack
 ```
 
-GitHub Actions runs typecheck, lint, unit, convergence, integration and E2E on every push. A second job builds the production images, starts the stack and runs the smoke test. The load ramp runs on demand (`load-test.yml`).
+The suite has 195 unit tests, the 500-seed convergence test, 68 integration tests and 36 Playwright E2E tests. GitHub Actions runs typecheck, lint, unit, convergence, integration and E2E on every push. A second job builds the production images, starts the stack and runs the smoke test. The load ramp runs on demand (`load-test.yml`).
 
 **Convergence test.** The core claim is that every client ends with the same board, whatever order ops arrive in. The test builds 5 simulated clients and has them make 1,000 random ops (create, move, recolor, delete, reorder, stroke appends and pen-up). It then delivers the ops in random order, with random delays and duplicates, and checks that all five boards are identical. It runs with 500 seeds; any failing seed can be replayed exactly with `CONVERGENCE_SEED=n`. It also checks that the tricky paths were actually exercised: ops arriving before their create, updates landing on tombstones, appends after pen-up, and duplicates.
 
@@ -137,6 +139,8 @@ E2E tests read state only through a read-only debug handle and act only through 
 Each client also creates a marker shape every second. Creates are never overwritten, so "every acked marker is still on the board at the end" proves no acknowledged edit was lost, even though snapshots prune the op log. The first runs found two real bugs:
 - nginx waited 60 s on a dead replica before failing over (now 2 s);
 - a frozen Postgres never triggered "Saving paused", because each attempt hung for about 60 s before counting as a failure (the outage clock now starts at the first attempt, with a watchdog).
+
+Later, a timing test for that watchdog failed on a slow CI runner. It had found a real edge case: a timer can fire a fraction of a millisecond early, so the watchdog's own "is it time yet?" check said no, and the pause slipped to the next failure, about a minute later. The watchdog now pauses outright when it fires.
 
 **Tests that lied, and how they were caught.**
 - **Playwright's offline mode passed offline tests the queue never handled.** The offline-queue tests (go offline, draw, reload while offline, come back) passed at first, without the queue doing anything. Playwright's offline mode doesn't block WebSockets, and during `page.reload()` it briefly fires `online` in the old page. That page then reconnected and sent its edits just before unloading. The tests now simulate a real outage (offline mode plus refused WebSocket connections) and assert how many ops the reopened tab restored from IndexedDB. A version of the feature that never restored anything now fails.
@@ -159,5 +163,6 @@ packages/client   React UI chrome + raw Canvas 2D renderer, tools, BoardStore, S
 packages/server   Fastify REST + ws rooms, op pipeline, OpWriter, Snapshotter, Redis bus, rate limits
 tests/            integration (Vitest), e2e (Playwright), smoke, convergence
 scripts/bench/    load and chaos tests
-docs/             system design, algorithms, benchmarks
+deploy/, render.yaml   the single-service image and Render blueprint for the live demo
+docs/             system design, algorithms, benchmarks, deploy (Render + Neon setup)
 ```
