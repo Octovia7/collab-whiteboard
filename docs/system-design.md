@@ -479,6 +479,15 @@ This runs in plain Node in a few seconds because `shared` has no DOM or network 
 
 **Numbers to put on the resume:** max editors per board at p95 under 150 ms, ops/s one server sustains, board load time at 10,000 shapes, and "0 divergences across 500 randomized runs."
 
+## Deployment
+
+- **Full stack:** `docker-compose.prod.yml` runs nginx (the static client, a strict CSP, the `/api` and `/ws` proxy) in front of two server replicas, plus Postgres and Redis with AOF persistence. The tests, the smoke test and the benchmarks run against it.
+- **Public demo:** runs on free tiers (`render.yaml`, details and limits in `docs/deploy.md`):
+  - one Render web service, with no nginx in front: the server serves the built client itself (`STATIC_DIR`, with the same CSP and security headers nginx sends);
+  - Render Key Value, which is in memory only;
+  - Neon Postgres.
+  The main security difference: a Key Value restart forgets revoked sessions until they expire.
+
 ## Build order
 
 Milestones are built in this order; each ends with something that runs. The checklist in `CLAUDE.md` ("Current status") is the source of truth for progress.

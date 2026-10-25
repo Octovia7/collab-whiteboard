@@ -60,6 +60,11 @@ const schema = z.object({
   METRICS_TOKEN: z.string().min(16).optional(),
   /** Where the SQL migrations are; defaults to packages/server/drizzle. */
   MIGRATIONS_DIR: z.string().min(1).optional(),
+  /**
+   * If set, the server also serves the built web client from this directory, with the app's
+   * CSP. For hosts that run one web service and no nginx (the Render demo, deploy/render).
+   */
+  STATIC_DIR: z.string().min(1).optional(),
   // Fault injection for E2E tests; rejected outright in production.
   WB_FAULT_COMMIT_DELAY_MS: int(0).default(0),
   WB_FAULT_ACK_DELAY_MS: int(0).default(0),
@@ -98,6 +103,7 @@ export interface Config {
   gap: { pollMs: number; holeAfterMs: number };
   metricsToken: string | undefined;
   migrationsDir: string | undefined;
+  staticDir: string | undefined;
   /** Fault injection for E2E tests; always zero in production. */
   faults: { commitDelayMs: number; ackDelayMs: number; control: boolean };
 }
@@ -154,6 +160,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     gap: { pollMs: c.GAP_POLL_MS, holeAfterMs: c.GAP_HOLE_MS },
     metricsToken: c.METRICS_TOKEN,
     migrationsDir: c.MIGRATIONS_DIR,
+    staticDir: c.STATIC_DIR,
     faults: { commitDelayMs: c.WB_FAULT_COMMIT_DELAY_MS, ackDelayMs: c.WB_FAULT_ACK_DELAY_MS, control: c.WB_FAULT_CONTROL },
   };
 }

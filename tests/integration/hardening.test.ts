@@ -39,7 +39,7 @@ describe('HTTP hardening', () => {
     const s = await server();
     const res = await s.app.inject({ method: 'GET', url: '/healthz' });
     expect(res.headers['x-content-type-options']).toBe('nosniff');
-    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['strict-transport-security']).toContain('max-age=');
     expect(res.headers['content-security-policy']).toContain("default-src 'none'");
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);

@@ -3,6 +3,7 @@ import fastifyCors from '@fastify/cors';
 import fastifyHelmet from '@fastify/helmet';
 import fastifyJwt from '@fastify/jwt';
 import fastifyRateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import { CLOSE, LIMITS, SERVICE_RESTART } from '@whiteboard/shared';
 import Fastify from 'fastify';
 import type { FastifyError, FastifyInstance } from 'fastify';
@@ -69,6 +70,22 @@ const REDACT = [
   '*.token',
   '*.cookie',
 ];
+
+/** The client's CSP: everything from our own origin only (same as packages/client/nginx.conf). */
+const APP_CSP = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'"],
+  styleSrc: ["'self'"],
+  imgSrc: ["'self'", 'data:'],
+  connectSrc: ["'self'"],
+  fontSrc: ["'self'"],
+  objectSrc: ["'none'"],
+  baseUri: ["'self'"],
+  formAction: ["'self'"],
+  frameAncestors: ["'none'"],
+  // helmet adds this by default; nginx doesn't, and it breaks the image over plain http locally.
+  upgradeInsecureRequests: null,
+};
 
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
   Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms))]);
@@ -145,9 +162,27 @@ export async function buildApp(config: Config, options: { logStream?: Writable }
   });
 
   await app.register(fastifyHelmet, {
-    // The API only serves JSON; the client's CSP is set by the static file server (nginx).
-    contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
+    // API-only (behind nginx, which sets the client's CSP): JSON never needs to load anything.
+    // Serving the client too (STATIC_DIR): the same policy nginx sends for the app.
+    contentSecurityPolicy: { directives: config.staticDir ? APP_CSP : { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   });
+  if (config.staticDir) {
+    app.addHook('onSend', async (_req, reply) => {
+      reply.header('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+    });
+    await app.register(fastifyStatic, {
+      root: config.staticDir,
+      wildcard: false, // only files that exist at startup: no filesystem lookups for arbitrary paths
+      setHeaders: (res, filePath) => {
+        // Vite fingerprints everything in assets/: cache it forever. index.html must be
+        // revalidated, or a deploy wouldn't reach returning visitors.
+        const immutable = /[\\/]assets[\\/]/.test(filePath);
+        res.header('cache-control', immutable ? 'public, max-age=31536000, immutable' : 'no-cache');
+      },
+    });
+  }
   await app.register(fastifyCors, {
     origin: (origin, cb) => cb(null, origin === undefined || config.allowedOrigins.includes(origin)),
     credentials: true,
