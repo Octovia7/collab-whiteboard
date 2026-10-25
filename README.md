@@ -4,7 +4,7 @@ A real-time multiplayer whiteboard, a small Excalidraw/Miro. Several people draw
 
 The point of the project is the sync engine and the backend. Conflict resolution, the op log, catch-up, multi-server fan-out and the canvas scene are all written from scratch: no Yjs, Automerge, Liveblocks, Socket.io, Konva or Fabric.js.
 
-**Live demo:** _not deployed yet (milestone 10)._ The demo runs on free tiers with real limits; see [Live demo limits](#live-demo-limits).
+**Live demo:** **https://collab-whiteboard-nmn6.onrender.com**. Sign up, create a board, and open it in a second browser or use **Share** to invite someone. It runs on free tiers: the first visit after 15 idle minutes takes about a minute to wake up. See [Live demo limits](#live-demo-limits).
 
 ## Features
 

@@ -111,7 +111,10 @@ export class OpWriter implements OpStore {
     // committed after pauseAfterMs, failed or not (found by the chaos test: a 40 s freeze never
     // showed "Saving paused").
     const firstAttemptAt = performance.now();
-    const watchdog = setTimeout(() => this.failed(firstAttemptAt), this.pauseAfterMs);
+    // The watchdog *is* the deadline, so it pauses outright: a timer can fire a fraction of a
+    // millisecond early, and re-checking the elapsed time here would then skip the pause until
+    // the next failure, which with Postgres frozen is another ~60 s away (caught by CI).
+    const watchdog = setTimeout(() => this.failed(firstAttemptAt, true), this.pauseAfterMs);
     try {
       return await this.commitWithRetry(batch, firstAttemptAt);
     } finally {
@@ -142,9 +145,9 @@ export class OpWriter implements OpStore {
   }
 
   /** Commits have been failing (or hanging) since `since`; pause once that's pauseAfterMs ago. */
-  private failed(since: number): void {
+  private failed(since: number, deadlineReached = false): void {
     this.failingSince ??= since;
-    if (!this.pausedFlag && this.untilPause() <= 0) {
+    if (!this.pausedFlag && (deadlineReached || this.untilPause() <= 0)) {
       this.pausedFlag = true;
       this.log.error({ failingForMs: Math.round(performance.now() - this.failingSince) }, 'saving paused: Postgres keeps failing');
       for (const fn of this.listeners) fn(true);

@@ -35,22 +35,24 @@ describe('OpWriter saving paused', () => {
   });
 
   it('counts the outage from the first attempt, not from the first failure', async () => {
-    // Each attempt hangs 80 ms and then fails: with a 150 ms threshold, saving pauses during
-    // the second attempt, not 150 ms after the first failure.
+    // Each attempt hangs 300 ms and then fails, with a 300 ms threshold. Counted from the first
+    // attempt, saving pauses at ~300 ms (the first attempt is still hanging); counted from the
+    // first failure, as it used to be, it couldn't pause before ~600 ms. The gap is wide so a
+    // slow CI runner can't blur it.
     let fail = true;
     const writer = new OpWriter(
       fakeRepo(async () => {
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise((r) => setTimeout(r, 300));
         if (fail) throw new Error('connection timeout');
         return [];
       }),
       log,
-      { pauseAfterMs: 150 },
+      { pauseAfterMs: 300 },
     );
     const started = performance.now();
     const committed = writer.append([op(1)]);
     while (!writer.paused) await new Promise((r) => setTimeout(r, 5));
-    expect(performance.now() - started).toBeLessThan(260);
+    expect(performance.now() - started).toBeLessThan(500);
     fail = false;
     await committed;
     expect(writer.paused).toBe(false);
