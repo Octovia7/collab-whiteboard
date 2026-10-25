@@ -19,6 +19,7 @@ import { ToolController } from './tools/ToolController';
 import { ConnectionBadge } from './ui/ConnectionBadge';
 import { NoteEditor } from './ui/NoteEditor';
 import { OnlineList } from './ui/OnlineList';
+import { BackArrowIcon, ShareIcon } from './ui/icons';
 import { ShareDialog } from './ui/ShareDialog';
 import { Toolbar } from './ui/Toolbar';
 import { UndoControls } from './ui/UndoControls';
@@ -183,19 +184,25 @@ export function App({ board: summary, user, onLogout }: Props) {
       <Toolbar tools={board.tools} selection={board.selection} />
       <ZoomControls camera={board.camera} getCenter={getCenter} />
       <UndoControls tools={board.tools} history={board.history} />
-      <header className="board-header">
-        <button type="button" className="link" onClick={openBoardList}>
-          ← Boards
+      <header className="board-header panel">
+        <button type="button" className="ghost-button back-button" onClick={openBoardList} title="All boards">
+          <BackArrowIcon />
+          Boards
         </button>
-        <span className="board-title">{summary.title}</span>
+        <span className="board-title" title={summary.title}>
+          {summary.title}
+        </span>
+      </header>
+      <div className="board-actions panel">
         <OnlineList presence={board.presence} />
         {summary.role === 'owner' && (
-          <button type="button" className="share-button" onClick={() => setSharing(true)}>
+          <button type="button" className="primary-button share-button" onClick={() => setSharing(true)}>
+            <ShareIcon />
             Share
           </button>
         )}
         <UserMenu user={user} onLogout={onLogout} />
-      </header>
+      </div>
       <ConnectionBadge sync={board.sync} boardId={board.boardId} />
       <NoteEditor tools={board.tools} store={board.store} camera={board.camera} />
       {sharing && <ShareDialog boardId={board.boardId} onClose={() => setSharing(false)} />}

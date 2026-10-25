@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { Member, ShareLink } from '../api';
 import { shareUrl } from '../boardId';
+import { Avatar } from './Avatar';
 
 type InviteRole = 'editor' | 'viewer';
 
@@ -97,8 +98,11 @@ export function ShareDialog({ boardId, onClose }: { boardId: string; onClose: ()
         }}
       >
         <header>
-          <h2>Share board</h2>
-          <button type="button" className="link" onClick={onClose}>
+          <div>
+            <h2>Share board</h2>
+            <p className="muted">Invite people by email, or turn on a link anyone can join with.</p>
+          </div>
+          <button type="button" className="ghost-button" onClick={onClose}>
             Close
           </button>
         </header>
@@ -109,7 +113,9 @@ export function ShareDialog({ boardId, onClose }: { boardId: string; onClose: ()
             <option value="editor">Editor</option>
             <option value="viewer">Viewer</option>
           </select>
-          <button type="submit">Invite</button>
+          <button type="submit" className="primary-button">
+            Invite
+          </button>
         </form>
         {error && (
           <p className="error" role="alert">
@@ -117,9 +123,11 @@ export function ShareDialog({ boardId, onClose }: { boardId: string; onClose: ()
           </p>
         )}
 
+        <h3 className="section-title">People with access</h3>
         <ul className="members" aria-label="Members">
           {members?.map((m) => (
             <li key={m.id}>
+              <Avatar name={m.name} size={32} />
               <span className="member-name">
                 {m.name} <span className="member-email">{m.email}</span>
               </span>
@@ -140,6 +148,7 @@ export function ShareDialog({ boardId, onClose }: { boardId: string; onClose: ()
           ))}
         </ul>
 
+        <h3 className="section-title">Share link</h3>
         <section className="share-link" aria-label="Share link">
           <label className="toggle">
             <input type="checkbox" checked={link !== null} onChange={(e) => void setLink(e.target.checked ? 'viewer' : null)} />
