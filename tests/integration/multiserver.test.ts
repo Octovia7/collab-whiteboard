@@ -216,14 +216,19 @@ describe('limits across servers', () => {
     const { owner, boardId } = await sharedBoard(a);
     const onA = await tab(a.port, boardId, owner.cookie, 'onA');
     const onB = await tab(b.port, boardId, owner.cookie, 'onB');
-    onA.store.submit(Array.from({ length: 100 }, (_, i) => onA.store.makeCreate({ ...rect, x: i })));
-    await waitFor(() => settled(onA), 'the burst on A');
+    const burst = Array.from({ length: 100 }, (_, i) => onA.store.makeCreate({ ...rect, x: i }));
+    onA.store.submit(burst);
+    // B sees A's burst relayed as soon as it passed A's rate limiter (milliseconds), long before
+    // it's committed and acked. Sending right then leaves the shared bucket no time to refill;
+    // waiting for A's acks instead (as this test once did) let a slow machine refill it.
+    await waitFor(() => burst.every((op) => onB.store.get(op.shape.id) !== undefined), "A's burst to pass the limiter");
     const started = performance.now();
     onB.store.submit(Array.from({ length: 60 }, (_, i) => onB.store.makeCreate({ ...rect, y: i })));
     await waitFor(() => settled(onB), 'B, throttled', 5000);
-    // A used the whole burst, so B's 60 ops wait for ~600 ms of refill at 100/s.
-    expect(performance.now() - started).toBeGreaterThan(400);
+    // With its own budget, B would never be throttled; with the shared one it waits for refill
+    // (about 600 ms at 100/s, less whatever refilled while A's ops were relayed).
     expect(await metric(b, 'ws_throttled_total')).toBeGreaterThan(0);
+    expect(performance.now() - started).toBeGreaterThan(250);
   });
 
   it('rate-limits login per IP across servers', async () => {

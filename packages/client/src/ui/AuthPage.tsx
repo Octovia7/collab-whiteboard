@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { api } from '../api';
 import type { User } from '../api';
+import { Logo } from './icons';
 
 const MESSAGES: Record<string, string> = {
   invalid_credentials: 'Wrong email or password.',
@@ -30,42 +31,51 @@ export function AuthPage({ onAuthed }: { onAuthed: (user: User) => void }) {
   };
 
   return (
-    <main className="page auth">
-      <h1>{mode === 'login' ? 'Log in' : 'Sign up'}</h1>
-      <form onSubmit={(e) => void submit(e)}>
-        {mode === 'signup' && (
+    <main className="auth-page">
+      <div className="auth-card">
+        <div className="brand">
+          <Logo size={34} />
+          <span className="brand-name">Whiteboard</span>
+        </div>
+        <h1>{mode === 'login' ? 'Log in' : 'Sign up'}</h1>
+        <p className="auth-subtitle">
+          {mode === 'login' ? 'Welcome back. Pick up where your team left off.' : 'Draw together in real time, on any number of boards.'}
+        </p>
+        <form onSubmit={(e) => void submit(e)}>
+          {mode === 'signup' && (
+            <label>
+              Name
+              <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} autoComplete="name" />
+            </label>
+          )}
           <label>
-            Name
-            <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} autoComplete="name" />
+            Email
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
           </label>
-        )}
-        <label>
-          Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          />
-        </label>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <button type="submit" disabled={busy}>
-          {mode === 'login' ? 'Log in' : 'Create account'}
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            />
+          </label>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <button type="submit" className="primary-button wide" disabled={busy}>
+            {mode === 'login' ? 'Log in' : 'Create account'}
+          </button>
+        </form>
+        <button type="button" className="link switch-mode" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
+          {mode === 'login' ? 'No account? Sign up' : 'Have an account? Log in'}
         </button>
-      </form>
-      <button type="button" className="link" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-        {mode === 'login' ? 'No account? Sign up' : 'Have an account? Log in'}
-      </button>
+      </div>
     </main>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { Camera } from '../canvas/Camera';
+import { MinusIcon, PlusIcon } from './icons';
 
 const STEP = 1.25;
 
@@ -25,15 +26,15 @@ export function ZoomControls({ camera, getCenter }: Props) {
   };
 
   return (
-    <div className="zoom-controls">
-      <button type="button" onClick={() => zoomBy(1 / STEP)} aria-label="Zoom out">
-        −
+    <div className="zoom-controls panel">
+      <button type="button" className="icon-button" onClick={() => zoomBy(1 / STEP)} aria-label="Zoom out" title="Zoom out">
+        <MinusIcon />
       </button>
-      <button type="button" onClick={reset} title="Reset to 100%">
+      <button type="button" className="zoom-level" onClick={reset} title="Reset to 100%">
         {Math.round(zoom * 100)}%
       </button>
-      <button type="button" onClick={() => zoomBy(STEP)} aria-label="Zoom in">
-        +
+      <button type="button" className="icon-button" onClick={() => zoomBy(STEP)} aria-label="Zoom in" title="Zoom in">
+        <PlusIcon />
       </button>
     </div>
   );
